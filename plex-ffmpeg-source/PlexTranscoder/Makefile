@@ -58,6 +58,7 @@ tools/target_dec_%_fuzzer$(EXESUF): $(FF_DEP_LIBS)
 CONFIGURABLE_COMPONENTS =                                           \
     $(wildcard $(FFLIBS:%=$(SRC_PATH)/lib%/all*.c))                 \
     $(SRC_PATH)/libavcodec/bitstream_filters.c                      \
+    $(SRC_PATH)/libavcodec/parsers.c                                \
     $(SRC_PATH)/libavformat/protocols.c                             \
 
 config.h: ffbuild/.config
@@ -134,7 +135,7 @@ uninstall-data:
 
 clean::
 	$(RM) $(CLEANSUFFIXES)
-	$(RM) $(addprefix compat/,$(CLEANSUFFIXES)) $(addprefix compat/*/,$(CLEANSUFFIXES))
+	$(RM) $(addprefix compat/,$(CLEANSUFFIXES)) $(addprefix compat/*/,$(CLEANSUFFIXES)) $(addprefix compat/*/*/,$(CLEANSUFFIXES))
 	$(RM) -r coverage-html
 	$(RM) -rf coverage.info coverage.info.in lcov
 
@@ -144,8 +145,7 @@ distclean:: clean
 		version.h libavutil/ffversion.h libavcodec/codec_names.h \
 		libavcodec/bsf_list.c libavformat/protocol_list.c \
 		libavcodec/codec_list.c libavcodec/parser_list.c \
-		libavformat/muxer_list.c libavformat/demuxer_list.c \
-		libavdevice/indev_list.c libavdevice/outdev_list.c
+		libavformat/muxer_list.c libavformat/demuxer_list.c
 ifeq ($(SRC_LINK),src)
 	$(RM) src
 endif
@@ -159,7 +159,7 @@ check: all alltools examples testprogs fate
 
 include $(SRC_PATH)/tests/Makefile
 
-$(sort $(OBJDIRS)):
+$(sort $(OUTDIRS)):
 	$(Q)mkdir -p $@
 
 # Dummy rule to stop make trying to rebuild removed or renamed headers

@@ -118,7 +118,7 @@ typedef enum LogLevel
 char* PMS_IssueHttpRequest(const char* url, const char* verb);
 void PMS_Log(LogLevel level, const char* format, ...);
 
-void plex_init(void);
+void plex_init(int argc, char **argv, const OptionDef *options);
 int av_log_get_level_plex(void);
 void av_log_set_level_plex(int);
 

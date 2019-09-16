@@ -206,6 +206,8 @@ static void plex_log_callback(void* ptr, int level, const char* fmt, va_list vl)
     logging = 1;
 #endif
 
+    print_prefix = cur_line[0] == 0;
+
     av_log_format_line(ptr, level, fmt, vl, line, sizeof(line), &print_prefix);
     av_strlcat(cur_line, line, LOG_LINE_SIZE);
     if (print_prefix) {
@@ -348,9 +350,17 @@ void plex_report_stream_detail(const AVStream *st)
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void plex_init(void)
+void plex_init(int argc, char **argv, const OptionDef *options)
 {
+    int idx;
     av_log_set_callback(plex_log_callback);
+
+    idx = locate_option(argc, argv, options, "loglevel_plex");
+    if (idx && argv[idx + 1])
+        opt_loglevel((void*)&av_log_set_level_plex, "loglevel_plex", argv[idx + 1]);
+    idx = locate_option(argc, argv, options, "progressurl");
+    if (idx && argv[idx + 1])
+        plex_opt_progress_url(NULL, "progressurl", argv[idx + 1]);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

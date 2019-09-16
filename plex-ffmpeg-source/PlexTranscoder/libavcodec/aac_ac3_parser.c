@@ -40,7 +40,7 @@ int ff_aac_ac3_parse(AVCodecParserContext *s1,
         s->remaining_size = 0;
         s1->flags |= PARSER_FLAG_COMPLETE_FRAMES;
         s1->duration = -1;
-        if (s1->flags & PARSER_FLAG_ONCE) {
+        if (s1->flags & PARSER_FLAG_ONCE || (!avctx->codec && avctx->profile == FF_PROFILE_UNKNOWN)) {
             got_frame = 1;
             i = buf_size;
             goto skip_sync;
@@ -75,6 +75,9 @@ get_next:
                     s->remaining_size += i;
                     goto get_next;
                 }
+                else if (i < 0) {
+                    s->remaining_size += i;
+                }
             }
         }
     }
@@ -94,7 +97,7 @@ skip_sync:
     if(s->codec_id)
         avctx->codec_id = s->codec_id;
 
-    if (s->parse_full && s1->flags & PARSER_FLAG_ONCE) {
+    if (s->parse_full && (s1->flags & PARSER_FLAG_ONCE || (!avctx->codec && avctx->profile == FF_PROFILE_UNKNOWN))) {
         if (!s->parse_full(s1, avctx, buf, buf_size))
             s1->flags &= ~PARSER_FLAG_ONCE;
     }
@@ -102,15 +105,18 @@ skip_sync:
     if (got_frame) {
         if (avctx->codec_id != AV_CODEC_ID_AAC) {
             avctx->sample_rate = s->sample_rate;
-            avctx->channels = s->channels;
-            avctx->channel_layout = s->channel_layout;
+            if (avctx->codec_id != AV_CODEC_ID_EAC3) {
+                avctx->channels = s->channels;
+                avctx->channel_layout = s->channel_layout;
+            }
             s1->duration = s->samples;
             avctx->audio_service_type = s->service_type;
 
             avctx->sample_fmt = AV_SAMPLE_FMT_S16P;
         }
 
-        avctx->bit_rate = s->bit_rate;
+        if (avctx->codec_id != AV_CODEC_ID_EAC3)
+            avctx->bit_rate = s->bit_rate;
     }
 
     return i;

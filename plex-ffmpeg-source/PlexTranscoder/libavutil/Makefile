@@ -24,12 +24,14 @@ HEADERS = adler32.h                                                     \
           dict.h                                                        \
           display.h                                                     \
           downmix_info.h                                                \
+          encryption_info.h                                             \
           error.h                                                       \
           eval.h                                                        \
           fifo.h                                                        \
           file.h                                                        \
           frame.h                                                       \
           hash.h                                                        \
+          hdr_dynamic_metadata.h                                        \
           hmac.h                                                        \
           hwcontext.h                                                   \
           hwcontext_cuda.h                                              \
@@ -95,6 +97,7 @@ OBJS = adler32.o                                                        \
        aes_ctr.o                                                        \
        audio_fifo.o                                                     \
        avstring.o                                                       \
+       avsscanf.o                                                       \
        base64.o                                                         \
        blowfish.o                                                       \
        bprint.o                                                         \
@@ -109,6 +112,7 @@ OBJS = adler32.o                                                        \
        dict.o                                                           \
        display.o                                                        \
        downmix_info.o                                                   \
+       encryption_info.o                                                \
        error.o                                                          \
        eval.o                                                           \
        extloader.o                                                      \
@@ -119,6 +123,7 @@ OBJS = adler32.o                                                        \
        fixed_dsp.o                                                      \
        frame.o                                                          \
        hash.o                                                           \
+       hdr_dynamic_metadata.o                                           \
        hmac.o                                                           \
        hwcontext.o                                                      \
        imgutils.o                                                       \
@@ -161,14 +166,14 @@ OBJS = adler32.o                                                        \
 OBJS-$(CONFIG_CUDA)                     += hwcontext_cuda.o
 OBJS-$(CONFIG_D3D11VA)                  += hwcontext_d3d11va.o
 OBJS-$(CONFIG_DXVA2)                    += hwcontext_dxva2.o
-OBJS-$(CONFIG_QSV)                   += hwcontext_qsv.o
 OBJS-$(CONFIG_LIBDRM)                   += hwcontext_drm.o
 OBJS-$(CONFIG_LZO)                      += lzo.o
+OBJS-$(CONFIG_MEDIACODEC)               += hwcontext_mediacodec.o
 OBJS-$(CONFIG_OPENCL)                   += hwcontext_opencl.o
+OBJS-$(CONFIG_QSV)                      += hwcontext_qsv.o
 OBJS-$(CONFIG_VAAPI)                    += hwcontext_vaapi.o
 OBJS-$(CONFIG_VIDEOTOOLBOX)             += hwcontext_videotoolbox.o
 OBJS-$(CONFIG_VDPAU)                    += hwcontext_vdpau.o
-OBJS-$(CONFIG_MEDIACODEC)               += hwcontext_mediacodec.o
 
 OBJS += $(COMPAT_OBJS:%=../compat/%)
 
@@ -176,10 +181,11 @@ OBJS += $(COMPAT_OBJS:%=../compat/%)
 SLIBOBJS-$(HAVE_GNU_WINDRES)            += avutilres.o
 
 SKIPHEADERS-$(HAVE_CUDA_H)             += hwcontext_cuda.h
-SKIPHEADERS-$(CONFIG_CUDA)             += hwcontext_cuda_internal.h
+SKIPHEADERS-$(CONFIG_CUDA)             += hwcontext_cuda_internal.h     \
+                                          cuda_check.h
 SKIPHEADERS-$(CONFIG_D3D11VA)          += hwcontext_d3d11va.h
 SKIPHEADERS-$(CONFIG_DXVA2)            += hwcontext_dxva2.h
-SKIPHEADERS-$(CONFIG_QSV)           += hwcontext_qsv.h
+SKIPHEADERS-$(CONFIG_QSV)              += hwcontext_qsv.h
 SKIPHEADERS-$(CONFIG_OPENCL)           += hwcontext_opencl.h
 SKIPHEADERS-$(CONFIG_VAAPI)            += hwcontext_vaapi.h
 SKIPHEADERS-$(CONFIG_VIDEOTOOLBOX)     += hwcontext_videotoolbox.h
@@ -201,12 +207,15 @@ TESTPROGS = adler32                                                     \
             des                                                         \
             dict                                                        \
             display                                                     \
+            encryption_info                                             \
             error                                                       \
             eval                                                        \
             file                                                        \
             fifo                                                        \
             hash                                                        \
             hmac                                                        \
+            hwdevice                                                    \
+            integer                                                     \
             imgutils                                                    \
             lfg                                                         \
             lls                                                         \

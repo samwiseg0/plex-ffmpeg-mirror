@@ -23,7 +23,7 @@ AVCODECOBJS-$(CONFIG_EXR_DECODER)       += exrdsp.o
 AVCODECOBJS-$(CONFIG_HUFFYUV_DECODER)   += huffyuvdsp.o
 AVCODECOBJS-$(CONFIG_JPEG2000_DECODER)  += jpeg2000dsp.o
 AVCODECOBJS-$(CONFIG_PIXBLOCKDSP)       += pixblockdsp.o
-AVCODECOBJS-$(CONFIG_HEVC_DECODER)      += hevc_add_res.o hevc_idct.o
+AVCODECOBJS-$(CONFIG_HEVC_DECODER)      += hevc_add_res.o hevc_idct.o hevc_sao.o
 AVCODECOBJS-$(CONFIG_UTVIDEO_DECODER)   += utvideodsp.o
 AVCODECOBJS-$(CONFIG_V210_ENCODER)      += v210enc.o
 AVCODECOBJS-$(CONFIG_VP9_DECODER)       += vp9dsp.o
@@ -31,13 +31,23 @@ AVCODECOBJS-$(CONFIG_VP9_DECODER)       += vp9dsp.o
 CHECKASMOBJS-$(CONFIG_AVCODEC)          += $(AVCODECOBJS-yes)
 
 # libavfilter tests
+AVFILTEROBJS-$(CONFIG_AFIR_FILTER) += af_afir.o
 AVFILTEROBJS-$(CONFIG_BLEND_FILTER) += vf_blend.o
+AVFILTEROBJS-$(CONFIG_BWDIF_FILTER)      += vf_bwdif.o
 AVFILTEROBJS-$(CONFIG_COLORSPACE_FILTER) += vf_colorspace.o
 AVFILTEROBJS-$(CONFIG_HFLIP_FILTER)      += vf_hflip.o
 AVFILTEROBJS-$(CONFIG_THRESHOLD_FILTER)  += vf_threshold.o
+AVFILTEROBJS-$(CONFIG_NLMEANS_FILTER)    += vf_nlmeans.o
+AVFILTEROBJS-$(CONFIG_YADIF_FILTER)      += vf_yadif.o
 
 CHECKASMOBJS-$(CONFIG_AVFILTER) += $(AVFILTEROBJS-yes)
 
+# swscale tests
+SWSCALEOBJS                             += sw_rgb.o
+
+CHECKASMOBJS-$(CONFIG_SWSCALE)  += $(SWSCALEOBJS)
+
+# libavutil tests
 AVUTILOBJS                              += fixed_dsp.o
 AVUTILOBJS                              += float_dsp.o
 
@@ -54,14 +64,14 @@ CHECKASMOBJS := $(sort $(CHECKASMOBJS:%=tests/checkasm/%))
 
 CHECKASMDIRS := $(sort $(dir $(CHECKASMOBJS)))
 $(CHECKASMOBJS): | $(CHECKASMDIRS)
-OBJDIRS += $(CHECKASMDIRS)
+OUTDIRS += $(CHECKASMDIRS)
 
 tests/checkasm/checkasm.o: CFLAGS += -Umain
 
 CHECKASM := tests/checkasm/checkasm$(EXESUF)
 
 $(CHECKASM): $(CHECKASMOBJS) $(FF_STATIC_DEP_LIBS)
-	$(LD) $(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $(CHECKASMOBJS) $(FF_STATIC_DEP_LIBS) $(EXTRALIBS-avcodec) $(EXTRALIBS-avfilter) $(EXTRALIBS-avutil) $(EXTRALIBS-swresample) $(EXTRALIBS)
+	$(LD) $(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $(CHECKASMOBJS) $(FF_STATIC_DEP_LIBS) $(EXTRALIBS-avcodec) $(EXTRALIBS-avfilter) $(EXTRALIBS-avformat) $(EXTRALIBS-avutil) $(EXTRALIBS-swresample) $(EXTRALIBS)
 
 checkasm: $(CHECKASM)
 

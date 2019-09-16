@@ -128,7 +128,10 @@ static int ogg_restore(AVFormatContext *s)
     ogg->state = ost->next;
 
         for (i = 0; i < ogg->nstreams; i++) {
-            av_freep(&ogg->streams[i].buf);
+            struct ogg_stream *stream = &ogg->streams[i];
+            av_freep(&stream->buf);
+            av_freep(&stream->new_metadata);
+
             if (i >= ost->nstreams || !ost->streams[i].private) {
                 free_stream(s, i);
             }
@@ -938,7 +941,7 @@ static int ogg_read_seek(AVFormatContext *s, int stream_index,
     return ret;
 }
 
-static int ogg_probe(AVProbeData *p)
+static int ogg_probe(const AVProbeData *p)
 {
     if (!memcmp("OggS", p->buf, 5) && p->buf[5] <= 0x7)
         return AVPROBE_SCORE_MAX;

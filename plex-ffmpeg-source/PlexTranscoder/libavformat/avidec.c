@@ -670,7 +670,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
             st->start_time = 0;
             avio_rl32(pb); /* buffer size */
             avio_rl32(pb); /* quality */
-            if (ast->cum_len*ast->scale/ast->rate > 3600) {
+            if (ast->cum_len > 3600LL * ast->rate / ast->scale) {
                 av_log(s, AV_LOG_ERROR, "crazy start time, iam scared, giving up\n");
                 ast->cum_len = 0;
             }
@@ -1068,7 +1068,7 @@ static int read_gab2_sub(AVFormatContext *s, AVStream *st, AVPacket *pkt)
         uint8_t desc[256];
         int score      = AVPROBE_SCORE_EXTENSION, ret;
         AVIStream *ast = st->priv_data;
-        AVInputFormat *sub_demuxer;
+        ff_const59 AVInputFormat *sub_demuxer;
         AVRational time_base;
         int size;
         AVIOContext *pb = avio_alloc_context(pkt->data + 7,
@@ -1231,6 +1231,11 @@ start_sync:
             goto start_sync;
         }
 
+        if (d[2] == 'w' && d[3] == 'c' && n < s->nb_streams) {
+            avio_skip(pb, 16 * 3 + 8);
+            goto start_sync;
+        }
+
         if (avi->dv_demux && n != 0)
             continue;
 
@@ -1378,8 +1383,8 @@ static int ni_prepare_read(AVFormatContext *s)
     if (i >= 0) {
         int64_t pos = best_st->index_entries[i].pos;
         pos += best_ast->packet_size - best_ast->remaining;
-        if (avio_seek(s->pb, pos + 8, SEEK_SET) < 0)
-          return AVERROR_EOF;
+        if ((pos = avio_seek(s->pb, pos + 8, SEEK_SET)) < 0)
+          return pos;
 
         av_assert0(best_ast->remaining <= best_ast->packet_size);
 
@@ -1915,7 +1920,7 @@ static int avi_read_close(AVFormatContext *s)
     return 0;
 }
 
-static int avi_probe(AVProbeData *p)
+static int avi_probe(const AVProbeData *p)
 {
     int i;
 

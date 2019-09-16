@@ -331,9 +331,13 @@ static int mediacodecndk_receive_frame(AVCodecContext *avctx, AVFrame* frame)
         return ret;
 
     if ((ret = mediacodecndk_send(avctx, &pkt)) < 0 && ret != AVERROR_EOF)
-        return ret;
+        goto end;
 
-    return mediacodecndk_receive(avctx, frame);
+    ret = mediacodecndk_receive(avctx, frame);
+
+end:
+    av_packet_unref(&pkt);
+    return ret;
 }
 
 static av_cold int mediacodecndk_decode_close(AVCodecContext *avctx)

@@ -171,7 +171,7 @@ static int procamp_vaapi_filter_frame(AVFilterLink *inlink, AVFrame *input_frame
         ff_vaapi_vpp_colour_standard(input_frame->colorspace);
 
     params.output_region = NULL;
-    params.output_background_color = 0xff000000;
+    params.output_background_color = VAAPI_VPP_BACKGROUND_BLACK;
     params.output_color_standard = params.surface_color_standard;
 
     params.pipeline_flags = 0;
@@ -214,7 +214,7 @@ static av_cold int procamp_vaapi_init(AVFilterContext *avctx)
 }
 
 #define OFFSET(x) offsetof(ProcampVAAPIContext, x)
-#define FLAGS (AV_OPT_FLAG_VIDEO_PARAM)
+#define FLAGS (AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_FILTERING_PARAM)
 static const AVOption procamp_vaapi_options[] = {
     { "b", "Output video brightness",
       OFFSET(bright),  AV_OPT_TYPE_FLOAT, { .dbl = BRIGHTNESS_DEFAULT }, BRIGHTNESS_MIN, BRIGHTNESS_MAX, .flags = FLAGS },

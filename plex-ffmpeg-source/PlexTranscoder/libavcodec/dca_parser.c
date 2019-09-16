@@ -404,7 +404,7 @@ parse_full:
         uint8_t *bebuf = NULL;
         DCAExssAsset *asset = &pc1->exss.assets[0];
         if (mrk != DCA_SYNCWORD_CORE_BE && mrk != DCA_SYNCWORD_SUBSTREAM) {
-            if (!(bebuf = av_malloc(buf_size)))
+            if (!(bebuf = av_malloc(input_size)))
                 goto fail;
             if ((ret = avpriv_dca_convert_bitstream(input, input_size, bebuf, input_size)) < 0)
                 goto fail;

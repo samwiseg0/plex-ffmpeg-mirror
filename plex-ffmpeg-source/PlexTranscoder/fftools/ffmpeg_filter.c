@@ -69,6 +69,7 @@ enum AVPixelFormat choose_pixel_fmt(AVStream *st, AVCodecContext *enc_ctx, AVCod
     if (codec && codec->pix_fmts) {
         const enum AVPixelFormat *p = codec->pix_fmts;
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(target);
+        //FIXME: This should check for AV_PIX_FMT_FLAG_ALPHA after PAL8 pixel format without alpha is implemented
         int has_alpha = desc ? desc->nb_components % 2 == 0 : 0;
         enum AVPixelFormat best= AV_PIX_FMT_NONE;
 
@@ -296,10 +297,17 @@ static void init_input_filter(FilterGraph *fg, AVFilterInOut *in)
             exit_program(1);
         }
         ist = input_streams[input_files[file_idx]->ist_index + st->index];
+        if (ist->user_set_discard == AVDISCARD_ALL) {
+            av_log(NULL, AV_LOG_FATAL, "Stream specifier '%s' in filtergraph description %s "
+                   "matches a disabled input stream.\n", p, fg->graph_desc);
+            exit_program(1);
+        }
     } else {
         /* find the first unused stream of corresponding type */
         for (i = 0; i < nb_input_streams; i++) {
             ist = input_streams[i];
+            if (ist->user_set_discard == AVDISCARD_ALL)
+                continue;
             if (ist->dec_ctx->codec_type == type && ist->discard)
                 break;
         }
@@ -735,6 +743,7 @@ static int sub2video_prepare(InputStream *ist, InputFilter *ifilter)
     if (!ist->sub2video.frame)
         return AVERROR(ENOMEM);
     ist->sub2video.last_pts = INT64_MIN;
+    ist->sub2video.end_pts  = INT64_MIN;
     return 0;
 }
 
@@ -778,7 +787,7 @@ static int configure_input_video_filter(FilterGraph *fg, InputFilter *ifilter,
     sar = ifilter->sample_aspect_ratio;
     if(!sar.den)
         sar = (AVRational){0,1};
-    av_bprint_init(&args, 0, 1);
+    av_bprint_init(&args, 0, AV_BPRINT_SIZE_AUTOMATIC);
     // PLEX
     // If we run out of time in the analysis probe, the pixel format might
     // not be detected correctly. This sets a sane default if that happens,

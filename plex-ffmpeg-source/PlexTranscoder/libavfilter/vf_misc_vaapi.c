@@ -174,7 +174,7 @@ static int misc_vaapi_filter_frame(AVFilterLink *inlink, AVFrame *input_frame)
         ff_vaapi_vpp_colour_standard(input_frame->colorspace);
 
     params.output_region = NULL;
-    params.output_background_color = 0xff000000;
+    params.output_background_color = VAAPI_VPP_BACKGROUND_BLACK;
     params.output_color_standard = params.surface_color_standard;
 
     params.pipeline_flags = 0;
@@ -226,7 +226,7 @@ static av_cold int sharpness_vaapi_init(AVFilterContext *avctx)
 }
 
 #define DOFFSET(x) offsetof(DenoiseVAAPIContext, x)
-#define FLAGS (AV_OPT_FLAG_VIDEO_PARAM)
+#define FLAGS (AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_FILTERING_PARAM)
 static const AVOption denoise_vaapi_options[] = {
     { "denoise", "denoise level",
       DOFFSET(denoise), AV_OPT_TYPE_INT, { .i64 = DENOISE_DEFAULT }, DENOISE_MIN, DENOISE_MAX, .flags = FLAGS },

@@ -899,7 +899,7 @@ static int pxr24_uncompress(EXRContext *s, const uint8_t *src,
 
 static void unpack_14(const uint8_t b[14], uint16_t s[16])
 {
-    unsigned short shift = (b[ 2] >> 2);
+    unsigned short shift = (b[ 2] >> 2) & 15;
     unsigned short bias = (0x20 << shift);
     int i;
 
@@ -1350,12 +1350,14 @@ static int decode_header(EXRContext *s, AVFrame *frame)
 
     flags = bytestream2_get_le24(&s->gb);
 
-    if (flags == 0x00)
-        s->is_tile = 0;
-    else if (flags & 0x02)
+    if (flags & 0x02)
         s->is_tile = 1;
-    else{
-        avpriv_report_missing_feature(s->avctx, "flags %d", flags);
+    if (flags & 0x08) {
+        avpriv_report_missing_feature(s->avctx, "deep data");
+        return AVERROR_PATCHWELCOME;
+    }
+    if (flags & 0x10) {
+        avpriv_report_missing_feature(s->avctx, "multipart");
         return AVERROR_PATCHWELCOME;
     }
 
@@ -1387,6 +1389,7 @@ static int decode_header(EXRContext *s, AVFrame *frame)
                         if (*ch_gb.buffer == '.')
                             ch_gb.buffer++;         /* skip dot if not given */
                     } else {
+                        layer_match = 0;
                         av_log(s->avctx, AV_LOG_INFO,
                                "Channel doesn't match layer : %s.\n", ch_gb.buffer);
                     }
@@ -1461,6 +1464,11 @@ static int decode_header(EXRContext *s, AVFrame *frame)
                     }
                     s->pixel_type                     = current_pixel_type;
                     s->channel_offsets[channel_index] = s->current_channel_offset;
+                } else if (channel_index >= 0) {
+                    av_log(s->avctx, AV_LOG_ERROR,
+                            "Multiple channels with index %d.\n", channel_index);
+                    ret = AVERROR_INVALIDDATA;
+                    goto fail;
                 }
 
                 s->channels = av_realloc(s->channels,

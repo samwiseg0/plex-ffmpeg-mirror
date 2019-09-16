@@ -546,8 +546,14 @@ static int read_header(FFV1Context *f)
         f->ac = get_symbol(c, state, 0);
 
         if (f->ac == AC_RANGE_CUSTOM_TAB) {
-            for (i = 1; i < 256; i++)
-                f->state_transition[i] = get_symbol(c, state, 1) + c->one_state[i];
+            for (i = 1; i < 256; i++) {
+                int st = get_symbol(c, state, 1) + c->one_state[i];
+                if (st < 1 || st > 255) {
+                    av_log(f->avctx, AV_LOG_ERROR, "invalid state transition %d\n", st);
+                    return AVERROR_INVALIDDATA;
+                }
+                f->state_transition[i] = st;
+            }
         }
 
         colorspace          = get_symbol(c, state, 0); //YUV cs type
@@ -591,7 +597,10 @@ static int read_header(FFV1Context *f)
         if (!f->transparency && !f->chroma_planes) {
             if (f->avctx->bits_per_raw_sample <= 8)
                 f->avctx->pix_fmt = AV_PIX_FMT_GRAY8;
-            else if (f->avctx->bits_per_raw_sample == 10) {
+            else if (f->avctx->bits_per_raw_sample == 9) {
+                f->packed_at_lsb = 1;
+                f->avctx->pix_fmt = AV_PIX_FMT_GRAY9;
+            } else if (f->avctx->bits_per_raw_sample == 10) {
                 f->packed_at_lsb = 1;
                 f->avctx->pix_fmt = AV_PIX_FMT_GRAY10;
             } else if (f->avctx->bits_per_raw_sample == 12) {
@@ -642,6 +651,7 @@ static int read_header(FFV1Context *f)
             f->packed_at_lsb = 1;
             switch(16 * f->chroma_h_shift + f->chroma_v_shift) {
             case 0x00: f->avctx->pix_fmt = AV_PIX_FMT_YUV444P10; break;
+            case 0x01: f->avctx->pix_fmt = AV_PIX_FMT_YUV440P10; break;
             case 0x10: f->avctx->pix_fmt = AV_PIX_FMT_YUV422P10; break;
             case 0x11: f->avctx->pix_fmt = AV_PIX_FMT_YUV420P10; break;
             }
@@ -656,8 +666,16 @@ static int read_header(FFV1Context *f)
             f->packed_at_lsb = 1;
             switch(16 * f->chroma_h_shift + f->chroma_v_shift) {
             case 0x00: f->avctx->pix_fmt = AV_PIX_FMT_YUV444P12; break;
+            case 0x01: f->avctx->pix_fmt = AV_PIX_FMT_YUV440P12; break;
             case 0x10: f->avctx->pix_fmt = AV_PIX_FMT_YUV422P12; break;
             case 0x11: f->avctx->pix_fmt = AV_PIX_FMT_YUV420P12; break;
+            }
+        } else if (f->avctx->bits_per_raw_sample == 14 && !f->transparency) {
+            f->packed_at_lsb = 1;
+            switch(16 * f->chroma_h_shift + f->chroma_v_shift) {
+            case 0x00: f->avctx->pix_fmt = AV_PIX_FMT_YUV444P14; break;
+            case 0x10: f->avctx->pix_fmt = AV_PIX_FMT_YUV422P14; break;
+            case 0x11: f->avctx->pix_fmt = AV_PIX_FMT_YUV420P14; break;
             }
         } else if (f->avctx->bits_per_raw_sample == 16 && !f->transparency){
             f->packed_at_lsb = 1;
@@ -938,7 +956,7 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame, AVPac
 
             }
             if (desc->flags & AV_PIX_FMT_FLAG_PAL ||
-                desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL) {
+                desc->flags & FF_PSEUDOPAL) {
                 dst[1] = p->data[1];
                 src[1] = f->last_picture.f->data[1];
             }

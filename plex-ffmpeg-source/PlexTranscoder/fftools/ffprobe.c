@@ -2262,7 +2262,8 @@ static av_always_inline int process_frame(WriterContext *w,
             break;
 
         case AVMEDIA_TYPE_SUBTITLE:
-            ret = avcodec_decode_subtitle2(dec_ctx, &sub, &got_frame, pkt);
+            if (*packet_new)
+                ret = avcodec_decode_subtitle2(dec_ctx, &sub, &got_frame, pkt);
             *packet_new = 0;
             break;
         default:
@@ -2357,11 +2358,11 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
         goto end;
     }
     while (!av_read_frame(fmt_ctx, &pkt)) {
-        if (ifile->nb_streams > nb_streams) {
+        if (fmt_ctx->nb_streams > nb_streams) {
             REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
             REALLOCZ_ARRAY_STREAM(nb_streams_packets, nb_streams, fmt_ctx->nb_streams);
             REALLOCZ_ARRAY_STREAM(selected_streams,   nb_streams, fmt_ctx->nb_streams);
-            nb_streams = ifile->nb_streams;
+            nb_streams = fmt_ctx->nb_streams;
         }
         if (selected_streams[pkt.stream_index]) {
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
@@ -2507,7 +2508,7 @@ static int show_stream(WriterContext *w, AVFormatContext *fmt_ctx, int stream_id
 #endif
         print_int("has_b_frames", par->video_delay);
         sar = av_guess_sample_aspect_ratio(fmt_ctx, stream, NULL);
-        if (sar.den) {
+        if (sar.num) {
             print_q("sample_aspect_ratio", sar, ':');
             av_reduce(&dar.num, &dar.den,
                       par->width  * sar.num,
@@ -2632,20 +2633,20 @@ static int show_stream(WriterContext *w, AVFormatContext *fmt_ctx, int stream_id
     } while (0)
 
     if (do_show_stream_disposition) {
-    writer_print_section_header(w, in_program ? SECTION_ID_PROGRAM_STREAM_DISPOSITION : SECTION_ID_STREAM_DISPOSITION);
-    PRINT_DISPOSITION(DEFAULT,          "default");
-    PRINT_DISPOSITION(DUB,              "dub");
-    PRINT_DISPOSITION(ORIGINAL,         "original");
-    PRINT_DISPOSITION(COMMENT,          "comment");
-    PRINT_DISPOSITION(LYRICS,           "lyrics");
-    PRINT_DISPOSITION(KARAOKE,          "karaoke");
-    PRINT_DISPOSITION(FORCED,           "forced");
-    PRINT_DISPOSITION(HEARING_IMPAIRED, "hearing_impaired");
-    PRINT_DISPOSITION(VISUAL_IMPAIRED,  "visual_impaired");
-    PRINT_DISPOSITION(CLEAN_EFFECTS,    "clean_effects");
-    PRINT_DISPOSITION(ATTACHED_PIC,     "attached_pic");
-    PRINT_DISPOSITION(TIMED_THUMBNAILS, "timed_thumbnails");
-    writer_print_section_footer(w);
+        writer_print_section_header(w, in_program ? SECTION_ID_PROGRAM_STREAM_DISPOSITION : SECTION_ID_STREAM_DISPOSITION);
+        PRINT_DISPOSITION(DEFAULT,          "default");
+        PRINT_DISPOSITION(DUB,              "dub");
+        PRINT_DISPOSITION(ORIGINAL,         "original");
+        PRINT_DISPOSITION(COMMENT,          "comment");
+        PRINT_DISPOSITION(LYRICS,           "lyrics");
+        PRINT_DISPOSITION(KARAOKE,          "karaoke");
+        PRINT_DISPOSITION(FORCED,           "forced");
+        PRINT_DISPOSITION(HEARING_IMPAIRED, "hearing_impaired");
+        PRINT_DISPOSITION(VISUAL_IMPAIRED,  "visual_impaired");
+        PRINT_DISPOSITION(CLEAN_EFFECTS,    "clean_effects");
+        PRINT_DISPOSITION(ATTACHED_PIC,     "attached_pic");
+        PRINT_DISPOSITION(TIMED_THUMBNAILS, "timed_thumbnails");
+        writer_print_section_footer(w);
     }
 
     if (do_show_stream_tags)
@@ -3104,7 +3105,9 @@ static void ffprobe_show_pixel_formats(WriterContext *w)
             PRINT_PIX_FMT_FLAG(HWACCEL,   "hwaccel");
             PRINT_PIX_FMT_FLAG(PLANAR,    "planar");
             PRINT_PIX_FMT_FLAG(RGB,       "rgb");
+#if FF_API_PSEUDOPAL
             PRINT_PIX_FMT_FLAG(PSEUDOPAL, "pseudopal");
+#endif
             PRINT_PIX_FMT_FLAG(ALPHA,     "alpha");
             writer_print_section_footer(w);
         }
@@ -3553,7 +3556,6 @@ int main(int argc, char **argv)
 
     options = real_options;
     parse_loglevel(argc, argv, options);
-    av_register_all();
     avformat_network_init();
     init_opts();
 #if CONFIG_AVDEVICE

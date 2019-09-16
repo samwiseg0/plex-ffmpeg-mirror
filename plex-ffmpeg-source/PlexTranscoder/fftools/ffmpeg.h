@@ -495,6 +495,7 @@ typedef struct OutputStream {
     AVRational frame_aspect_ratio;
 
     /* forced key frames */
+    int64_t forced_kf_ref_pts;
     int64_t *forced_kf_pts;
     int forced_kf_count;
     int forced_kf_index;
@@ -536,9 +537,6 @@ typedef struct OutputStream {
     char *disposition;
 
     int keep_pix_fmt;
-
-    AVCodecParserContext *parser;
-    AVCodecContext       *parser_avctx;
 
     /* stats */
     // combined size of all the packets written
@@ -625,7 +623,6 @@ extern int filter_complex_nbthreads;
 extern int vstats_version;
 
 //PLEX
-extern int skip_before_video;
 extern int exit_on_io_error;
 //PLEX
 
