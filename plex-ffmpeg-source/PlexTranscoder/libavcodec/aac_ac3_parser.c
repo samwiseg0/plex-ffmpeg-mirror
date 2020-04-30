@@ -40,7 +40,10 @@ int ff_aac_ac3_parse(AVCodecParserContext *s1,
         s->remaining_size = 0;
         s1->flags |= PARSER_FLAG_COMPLETE_FRAMES;
         s1->duration = -1;
-        if (s1->flags & PARSER_FLAG_ONCE || (!avctx->codec && avctx->profile == FF_PROFILE_UNKNOWN)) {
+        if (s1->flags & PARSER_FLAG_ONCE || (!avctx->codec &&
+                ((avctx->codec_id == AV_CODEC_ID_AAC) ?
+                 avctx->profile == FF_PROFILE_UNKNOWN :
+                 avctx->channel_layout == 0))) {
             got_frame = 1;
             i = buf_size;
             goto skip_sync;

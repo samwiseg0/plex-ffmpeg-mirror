@@ -343,6 +343,16 @@ int ff_http_do_new_request(URLContext *h, const char *uri)
     if (s->willclose)
         return AVERROR_EOF;
 
+    // PLEX
+    ret = 0;
+    while (ret >= 0) {
+        char buf[1024];
+        ret = h->prot->url_read(h, buf, sizeof(buf));
+        if (ret < 0 && ret != AVERROR_EOF)
+            return ret;
+    }
+    //PLEX
+
     s->end_chunked_post = 0;
     s->chunkend      = 0;
     s->off           = 0;
@@ -1773,12 +1783,19 @@ static int http_get_short_seek(URLContext *h)
     return ffurl_get_short_seek(s->hd);
 }
 
+static void *http_child_next(void *obj, void *prev)
+{
+    HTTPContext *h = obj;
+    return prev ? NULL : h->hd;
+}
+
 #define HTTP_CLASS(flavor)                          \
 static const AVClass flavor ## _context_class = {   \
     .class_name = # flavor,                         \
     .item_name  = av_default_item_name,             \
     .option     = options,                          \
     .version    = LIBAVUTIL_VERSION_INT,            \
+    .child_next = http_child_next,                  \
 }
 
 #if CONFIG_HTTP_PROTOCOL

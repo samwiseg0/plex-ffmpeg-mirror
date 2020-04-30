@@ -39,6 +39,7 @@ typedef int (*AVInitLibrary)(FFLibrary* lib, int level);
 
 int av_init_library(FFLibrary* lib, int level);
 void av_set_needs_rescan(void);
+void av_set_extlibs_path(const char *inp);
 
 void avpriv_load_new_libs(FFLibrary* lib);
 

@@ -207,6 +207,16 @@ static void ff_unlock_lib(FFLibrary* lib)
 
 static int needs_rescan = 1;
 int ff_is_master = 1;
+static char *set_paths = NULL;
+
+void av_set_extlibs_path(const char *inp)
+{
+    ff_lock_lib(NULL);
+    av_freep(&set_paths);
+    set_paths = av_strdup(inp);
+    needs_rescan = 1;
+    ff_unlock_lib(NULL);
+}
 
 void av_set_needs_rescan(void)
 {
@@ -219,7 +229,6 @@ void av_set_needs_rescan(void)
 // Uses ff_library to add them to the internal state.
 void avpriv_load_new_libs(FFLibrary* lib)
 {
-    char *paths_env;
     const char *paths;
     const char *cur = NULL;
 
@@ -227,13 +236,17 @@ void avpriv_load_new_libs(FFLibrary* lib)
     if (!ff_is_master)
         return;
 
-    paths = paths_env = ff_getenv("FFMPEG_EXTERNAL_LIBS");
-    if (!paths)
-        return;
-
     ff_lock_lib(lib);
 
     if (!needs_rescan)
+        goto skip;
+
+    if (!set_paths)
+        set_paths = ff_getenv("FFMPEG_EXTERNAL_LIBS");
+
+    paths = set_paths;
+
+    if (!paths)
         goto skip;
 
     needs_rescan = 0;
@@ -254,7 +267,5 @@ void avpriv_load_new_libs(FFLibrary* lib)
     }
 
 skip:
-    av_free(paths_env);
-
     ff_unlock_lib(lib);
 }

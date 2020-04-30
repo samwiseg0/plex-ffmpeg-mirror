@@ -1311,7 +1311,7 @@ cleanup:
 
 static int update_init_section(struct playlist *pls, struct segment *seg)
 {
-    static const int max_init_section_size = 1024*1024;
+    static const int max_init_section_size = 1024*1024*100;
     HLSContext *c = pls->parent->priv_data;
     int64_t sec_size;
     int64_t urlsize;
@@ -1692,7 +1692,7 @@ static int save_avio_options(AVFormatContext *s)
 {
     HLSContext *c = s->priv_data;
     static const char * const opts[] = {
-        "headers", "http_proxy", "user_agent", "cookies", "referer", "rw_timeout", NULL };
+        "headers", "http_proxy", "user_agent", "cookies", "referer", "rw_timeout", "tls_verify", "cafile", "ca_file", "verifyhost", "resolve_hosts", NULL };
     const char * const * opt = opts;
     uint8_t *buf;
     int ret = 0;
@@ -2254,8 +2254,8 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
               (ist->internal->avctx->height && !ist->codecpar->height) ||
               (ist->internal->avctx->sample_rate && !ist->codecpar->sample_rate)
             ))
-         || ist->codecpar->sample_rate != st->codecpar->sample_rate
-         || ist->codecpar->channels != st->codecpar->channels
+         || (ist->codecpar->sample_rate && !st->codecpar->sample_rate)
+         || (ist->codecpar->channels && !st->codecpar->channels)
 //PLEX
             ) {
             ret = set_stream_info_from_input_stream(st, pls, ist);

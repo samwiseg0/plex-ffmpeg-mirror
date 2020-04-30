@@ -1836,7 +1836,9 @@ end:
 static int save_avio_options(AVFormatContext *s)
 {
     DASHContext *c = s->priv_data;
-    const char *opts[] = { "headers", "user_agent", "cookies", NULL }, **opt = opts;
+    const char *opts[] = {
+        "headers", "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", "tls_verify", "cafile", "ca_file", "verifyhost", "resolve_hosts", NULL };
+    const char **opt = opts;
     uint8_t *buf = NULL;
     int ret = 0;
 

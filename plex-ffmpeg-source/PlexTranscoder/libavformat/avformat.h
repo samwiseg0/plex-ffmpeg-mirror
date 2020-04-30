@@ -1954,6 +1954,15 @@ typedef struct AVFormatContext {
      * - decoding: set by user
      */
     int skip_estimate_duration_from_pts;
+
+    /**
+     * Maximum buffering duration for interleaving sparse streams.
+     *
+     * @see max_interleave_delta
+     *
+     * Applies only to subtitle and data streams.
+     */
+    int64_t max_sparse_interleave_delta;
 } AVFormatContext;
 
 #if FF_API_FORMAT_GET_SET

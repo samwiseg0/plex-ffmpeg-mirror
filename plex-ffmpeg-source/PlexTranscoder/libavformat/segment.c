@@ -133,6 +133,7 @@ typedef struct SegmentContext {
     int segment_copyts;    ///< PLEX
     int list_separate_times;    ///< PLEX
     int list_unfinished;     ///< PLEX
+    int cur_list_size; ///< PLEX
 } SegmentContext;
 
 static void print_csv_escaped_str(AVIOContext *ctx, const char *str)
@@ -383,6 +384,7 @@ static int segment_write_list(AVFormatContext *s, int complete, int is_last)
             int http_base_proto = ff_is_http_proto(seg->list);
             SegmentListEntry *entry;
 
+            //PLEX
             if (complete && seg->list_unfinished) {
                 entry = seg->segment_list_entries_end;
                 av_free(entry->filename);
@@ -390,7 +392,9 @@ static int segment_write_list(AVFormatContext *s, int complete, int is_last)
                 entry = av_mallocz(sizeof(*entry));
                 if (!entry)
                     return AVERROR(ENOMEM);
+                seg->cur_list_size++;
             }
+            //PLEX
 
 
             /* append new element */
@@ -403,11 +407,12 @@ static int segment_write_list(AVFormatContext *s, int complete, int is_last)
             seg->segment_list_entries_end = entry;
 
             /* drop first item */
-            if (seg->list_size && seg->segment_count >= seg->list_size) {
+            if (seg->list_size && seg->cur_list_size >= seg->list_size) { //PLEX
                 entry = seg->segment_list_entries;
                 seg->segment_list_entries = seg->segment_list_entries->next;
                 av_freep(&entry->filename);
                 av_freep(&entry);
+                seg->cur_list_size--; //PLEX
             }
 
             if ((ret = segment_list_open(s)) < 0)
@@ -455,6 +460,8 @@ static int segment_end(AVFormatContext *s, int write_trailer, int is_last)
     av_write_frame(oc, NULL); /* Flush any buffered data (fragmented mp4) */
     if (write_trailer)
         ret = av_write_trailer(oc);
+
+    avio_flush(oc->pb);
 
     if (ret < 0)
         av_log(s, AV_LOG_ERROR, "Failure occurred when ending segment '%s'\n",

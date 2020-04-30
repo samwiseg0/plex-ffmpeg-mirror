@@ -133,6 +133,7 @@ typedef struct DASHContext {
 //PLEX
     int break_non_keyframes;
     const char *manifest_file_name;
+    int delete_removed;
     int skip_to_segment;
 //PLEX
     const char *method;
@@ -322,7 +323,14 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
     else
         return;
 
+
     tag = par->codec_tag;
+
+    //PLEX
+    if (tag && av_codec_get_id(tags, tag) != par->codec_id)
+        tag = 0;
+    //PLEX
+
     if (!tag)
         tag = av_codec_get_tag(tags, par->codec_id);
     if (!tag)
@@ -1284,7 +1292,7 @@ static int dash_init(AVFormatContext *s)
             }
 
             //PLEX
-            if (c->skip_to_segment)
+            if (c->skip_to_segment > 1)
                 av_dict_set(&opts, "movflags", "+frag_discont", AV_DICT_APPEND);
             //PLEX
         } else {
@@ -1520,8 +1528,10 @@ static int dashenc_delete_segment_file(AVFormatContext *s, const char* file)
 
 static inline void dashenc_delete_media_segments(AVFormatContext *s, OutputStream *os, int remove_count)
 {
+    DASHContext *c = s->priv_data; //PLEX
     for (int i = 0; i < remove_count; ++i) {
-        dashenc_delete_segment_file(s, os->segments[i]->file);
+        if (c->delete_removed) //PLEX
+            dashenc_delete_segment_file(s, os->segments[i]->file);
 
         // Delete the segment regardless of whether the file was successfully deleted
         av_free(os->segments[i]);
@@ -1623,7 +1633,7 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
     if (c->window_size) {
         for (i = 0; i < s->nb_streams; i++) {
             OutputStream *os = &c->streams[i];
-            int remove_count = os->nb_segments - c->window_size - c->extra_window_size;
+            int remove_count = FFMAX((int64_t)os->nb_segments - c->window_size - c->extra_window_size, 0);
             if (remove_count > 0)
                 dashenc_delete_media_segments(s, os, remove_count);
         }
@@ -1900,6 +1910,7 @@ static const AVOption options[] = {
     { "manifest_name", "Location to write the manifest (does not affect segments)", OFFSET(manifest_file_name), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "skip_to_segment", "first segment number to actually write", OFFSET(skip_to_segment), AV_OPT_TYPE_INT, { .i64 = 1 }, 1, INT_MAX, E },
     { "break_non_keyframes", "allow breaking segments on non-keyframes", OFFSET(break_non_keyframes), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, E },
+    { "delete_removed", "delete segments that are removed from the list", OFFSET(delete_removed), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, E },
     { "format_options", "set list of options for the underlying mp4 muxer", OFFSET(format_options_str), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, E },
 //PLEX
     { "method", "set the HTTP method", OFFSET(method), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, E },

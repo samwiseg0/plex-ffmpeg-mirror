@@ -369,6 +369,9 @@ typedef struct MatroskaDemuxContext {
 
     /* Bandwidth value for WebM DASH Manifest */
     int bandwidth;
+
+    /* Skip parsing tags in trailers */
+    int skip_trailer_tags;
 } MatroskaDemuxContext;
 
 typedef struct MatroskaBlock {
@@ -1675,6 +1678,10 @@ static void matroska_execute_seekhead(MatroskaDemuxContext *matroska)
 
         // defer cues parsing until we actually need cue data.
         if (id == MATROSKA_ID_CUES)
+            continue;
+
+        // don't seek for metadata if we don't care
+        if (id == MATROSKA_ID_TAGS && matroska->skip_trailer_tags)
             continue;
 
         if (matroska_parse_seekhead_entry(matroska, pos) < 0) {
@@ -4059,17 +4066,33 @@ static int webm_dash_manifest_read_packet(AVFormatContext *s, AVPacket *pkt)
     return AVERROR_EOF;
 }
 
+#define COMMON_OPTS \
+    { "skip_trailer_tags", "skip parsing metadata at the end of the file.", OFFSET(skip_trailer_tags), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_DECODING_PARAM }, \
+
 #define OFFSET(x) offsetof(MatroskaDemuxContext, x)
-static const AVOption options[] = {
+static const AVOption matroskadec_options[] = {
+    COMMON_OPTS
+    { NULL },
+};
+
+static const AVOption webm_dash_options[] = {
     { "live", "flag indicating that the input is a live file that only has the headers.", OFFSET(is_live), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_DECODING_PARAM },
     { "bandwidth", "bandwidth of this stream to be specified in the DASH manifest.", OFFSET(bandwidth), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, AV_OPT_FLAG_DECODING_PARAM },
+    COMMON_OPTS
     { NULL },
+};
+
+static const AVClass matroskadec_class = {
+    .class_name = "Matroska demuxer",
+    .item_name  = av_default_item_name,
+    .option     = matroskadec_options,
+    .version    = LIBAVUTIL_VERSION_INT,
 };
 
 static const AVClass webm_dash_class = {
     .class_name = "WebM DASH Manifest demuxer",
     .item_name  = av_default_item_name,
-    .option     = options,
+    .option     = webm_dash_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
@@ -4083,6 +4106,7 @@ AVInputFormat ff_matroska_demuxer = {
     .read_packet    = matroska_read_packet,
     .read_close     = matroska_read_close,
     .read_seek      = matroska_read_seek,
+    .priv_class     = &matroskadec_class,
     .mime_type      = "audio/webm,audio/x-matroska,video/webm,video/x-matroska"
 };
 

@@ -1167,8 +1167,10 @@ static int open_input_file(OptionsContext *o, const char *filename)
             av_set_needs_rescan();
             for (i = orig_nb_streams; i < ic->nb_streams; i++)
                 choose_decoder(o, ic, ic->streams[i]);
-            for (i = 0; i < orig_nb_streams; i++)
+            for (i = 0; i < orig_nb_streams; i++) {
                 av_dict_free(&opts[i]);
+                ic->streams[i]->codec_info_nb_frames = 0;
+            }
             av_freep(&opts);
             opts = setup_find_stream_info_opts(ic, o->g->codec_opts);
             orig_nb_streams = ic->nb_streams;

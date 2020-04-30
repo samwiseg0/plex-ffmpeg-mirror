@@ -37,7 +37,7 @@
 #include "ac3_parser_internal.h"
 #include "avcodec.h"
 #include "internal.h"
-#include "mlp_parser.h"
+#include "mlp_parse.h"
 
 #ifdef _WIN32
 #define PATHSEP "\\"
@@ -761,9 +761,10 @@ static int eae_merge_prebuffer_packet(AVCodecContext *avctx, const AVPacket *avp
 
     if (s->prebuffered_packet.size) {
         int start_offset = s->prebuffered_packet.size;
+        if ((err = av_packet_make_writable(&s->prebuffered_packet)) < 0)
+            return err;
         if ((err = av_grow_packet(&s->prebuffered_packet, avpkt->size)) < 0)
             return err;
-        av_assert0(av_buffer_is_writable(s->prebuffered_packet.buf));
         memcpy(s->prebuffered_packet.data + start_offset, avpkt->data, avpkt->size);
     } else {
         if ((err = av_packet_ref(&s->prebuffered_packet, avpkt)) < 0)
