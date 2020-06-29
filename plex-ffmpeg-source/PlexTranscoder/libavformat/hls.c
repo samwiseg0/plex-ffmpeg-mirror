@@ -1692,7 +1692,7 @@ static int save_avio_options(AVFormatContext *s)
 {
     HLSContext *c = s->priv_data;
     static const char * const opts[] = {
-        "headers", "http_proxy", "user_agent", "cookies", "referer", "rw_timeout", "tls_verify", "cafile", "ca_file", "verifyhost", "resolve_hosts", NULL };
+        "headers", "http_proxy", "user_agent", "cookies", "referer", "rw_timeout", "tls_verify", "cafile", "ca_file", "resolve_hosts", NULL };
     const char * const * opt = opts;
     uint8_t *buf;
     int ret = 0;

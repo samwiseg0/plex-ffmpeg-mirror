@@ -1,3 +1,2 @@
-plex=1.19.4.2935-79e214ead
-PlexMediaServer=plex-media-server-ffmpeg-gpl-09988bd25fb23a0b2386468667d51ae2349d6516
-PlexTranscoder=plex-media-server-ffmpeg-gpl-99c90e0bc7f74214ac894c252e12a1d4f939faec
+plex=1.19.5.3006-da9510f6b
+PlexTranscoder=plex-media-server-ffmpeg-gpl-5f603a2168681fca6deb5062356189e33d488d3a

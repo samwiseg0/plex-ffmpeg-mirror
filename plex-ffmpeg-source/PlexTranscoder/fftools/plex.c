@@ -343,7 +343,11 @@ void plex_report_stream_detail(const AVStream *st)
         SEND_DISPOSITION(CLEAN_EFFECTS,    "clean_effects");
         SEND_DISPOSITION(ATTACHED_PIC,     "attached_pic");
         SEND_DISPOSITION(TIMED_THUMBNAILS, "timed_thumbnails");
-
+        SEND_DISPOSITION(CAPTIONS,         "captions");
+        SEND_DISPOSITION(DESCRIPTIONS,     "descriptions");
+        SEND_DISPOSITION(METADATA,         "metadata");
+        SEND_DISPOSITION(DEPENDENT,        "dependent");
+        SEND_DISPOSITION(STILL_IMAGE,      "still_image");
 
         av_free(PMS_IssueHttpRequest(url, "PUT"));
     }

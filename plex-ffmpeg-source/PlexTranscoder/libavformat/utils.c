@@ -96,6 +96,19 @@ static int is_relative(int64_t ts) {
     return ts > (RELATIVE_TS_BASE - (1LL<<48));
 }
 
+//PLEX
+static AVDecryptionCallbacks decryption_callbacks = {NULL};
+void avformat_set_decryption_callbacks(const AVDecryptionCallbacks* cbs)
+{
+    ff_lock_avformat();
+    if (cbs)
+        decryption_callbacks = *cbs;
+    else
+        decryption_callbacks = (AVDecryptionCallbacks){NULL};
+    ff_unlock_avformat();
+}
+//PLEX
+
 /**
  * Wrap a given time stamp, if there is an indication for an overflow
  *
@@ -536,6 +549,17 @@ FF_ENABLE_DEPRECATION_WARNINGS
 #endif
 
         st->internal->need_context_update = 0;
+
+//PLEX
+        if (!st->internal->decrypt_inited) {
+            ff_lock_avformat();
+            int (*new_stream)(AVFormatContext *ctx, AVStream *s) = decryption_callbacks.new_stream;
+            ff_unlock_avformat();
+            if (new_stream)
+                new_stream(s, st);
+            st->internal->decrypt_inited = 1;
+        }
+//PLEX
     }
     return 0;
 }
@@ -1772,6 +1796,12 @@ FF_ENABLE_DEPRECATION_WARNINGS
             }
             st->inject_global_side_data = 0;
         }
+
+        ff_lock_avformat();
+        int (*handle_packet)(AVFormatContext *ctx, AVPacket *pkt) = decryption_callbacks.handle_packet;
+        ff_unlock_avformat();
+        if (handle_packet)
+            handle_packet(s, pkt);
     }
 
     av_opt_get_dict_val(s, "metadata", AV_OPT_SEARCH_CHILDREN, &metadata);
@@ -4477,6 +4507,14 @@ void ff_free_stream(AVFormatContext *s, AVStream *st)
     av_assert0(s->nb_streams>0);
     av_assert0(s->streams[ s->nb_streams - 1 ] == st);
 
+//PLEX
+    ff_lock_avformat();
+    int (*close_stream)(AVFormatContext *ctx, AVStream *s) = decryption_callbacks.close_stream;
+    ff_unlock_avformat();
+    if (close_stream)
+        close_stream(s, st);
+//PLEX
+
     free_stream(&s->streams[ --s->nb_streams ]);
 }
 
@@ -5544,6 +5582,20 @@ uint8_t *av_stream_get_side_data(const AVStream *st,
         }
     }
     return NULL;
+}
+
+int ff_stream_copy_side_data(AVStream *dst, const AVStream *src)
+{
+    int i;
+
+    for (i = 0; i < src->nb_side_data; i++) {
+        uint8_t *new = av_stream_new_side_data(dst, src->side_data[i].type, src->side_data[i].size);
+        if (!new)
+            return AVERROR(ENOMEM);
+        memcpy(new, src->side_data[i].data, src->side_data[i].size);
+    }
+
+    return 0;
 }
 
 int av_stream_add_side_data(AVStream *st, enum AVPacketSideDataType type,

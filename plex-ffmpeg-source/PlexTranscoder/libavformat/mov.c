@@ -7515,6 +7515,9 @@ static int mov_read_header(AVFormatContext *s)
     else
         atom.size = INT64_MAX;
 
+    if (mov->header_size > 0)
+        atom.size = mov->header_size;
+
     /* check MOV header */
     do {
         if (mov->moov_retry)
@@ -7531,6 +7534,9 @@ static int mov_read_header(AVFormatContext *s)
         return AVERROR_INVALIDDATA;
     }
     av_log(mov->fc, AV_LOG_TRACE, "on_parse_exit_offset=%"PRId64"\n", avio_tell(pb));
+
+    if (mov->header_size > 0)
+        mov->next_root_atom = mov->header_size;
 
     if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
         if (mov->nb_chapter_tracks > 0)
@@ -8094,7 +8100,9 @@ static const AVOption mov_options[] = {
     { "decryption_key", "The media decryption key (hex)", OFFSET(decryption_key), AV_OPT_TYPE_BINARY, .flags = AV_OPT_FLAG_DECODING_PARAM },
     { "enable_drefs", "Enable external track support.", OFFSET(enable_drefs), AV_OPT_TYPE_BOOL,
         {.i64 = 0}, 0, 1, FLAGS },
-
+    { "header_size", "size of initial header, ",
+        OFFSET(header_size), AV_OPT_TYPE_INT64, {.i64 = -1},
+        -1, INT64_MAX, FLAGS },
     { NULL },
 };
 

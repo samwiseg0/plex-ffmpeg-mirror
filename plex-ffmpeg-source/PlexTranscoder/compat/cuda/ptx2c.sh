@@ -28,7 +28,7 @@ NAME="$(basename "$IN" | sed 's/\..*//')"
 
 printf "const char %s_ptx[] = \\" "$NAME" > "$OUT"
 echo >> "$OUT"
-sed -e 's/\r//g' -e 's/["\\]/\\&/g' -e 's/^[[:space:]]*/\t"/' -e 's/$/\\n"/' < "$IN" >> "$OUT"
+sed -e "$(printf 's/\r//g')" -e 's/["\\]/\\&/g' -e "$(printf 's/^/\t"/')" -e 's/$/\\n"/' < "$IN" >> "$OUT"
 echo ";" >> "$OUT"
 
 exit 0
