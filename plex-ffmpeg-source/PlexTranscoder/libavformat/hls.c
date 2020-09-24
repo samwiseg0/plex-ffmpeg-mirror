@@ -76,6 +76,7 @@ struct segment {
     uint8_t iv[16];
     /* associated Media Initialization Section, treated as a segment */
     struct segment *init_section;
+    int discont_sequence;
 };
 
 struct rendition;
@@ -158,6 +159,9 @@ struct playlist {
      * playlist, if any. */
     int n_init_sections;
     struct segment **init_sections;
+
+    int cur_discont_sequence;
+    int64_t cur_ts_offset;
 };
 
 /*
@@ -213,6 +217,7 @@ typedef struct HLSContext {
 
     int64_t current_stream_duration;
     int64_t current_stream_start_position;
+    int linearize_timestamps;
 } HLSContext;
 
 static void free_segment_dynarray(struct segment **segments, int n_segments)
@@ -710,6 +715,7 @@ static int parse_playlist(HLSContext *c, const char *url,
     struct segment **prev_segments = NULL;
     int prev_n_segments = 0;
     int prev_start_seq_no = -1;
+    int discont_sequence = 0;
 
     if (is_http && !in && c->http_persistent && c->playlist_pb) {
         in = c->playlist_pb;
@@ -822,6 +828,9 @@ static int parse_playlist(HLSContext *c, const char *url,
             for (int i = 0; i < seq; i++) {
                 c->current_stream_start_position += pls->segments[i]->duration;
             }
+
+            if (discont_sequence == 0 && seq >= 1)
+                discont_sequence = pls->segments[FFMAX(seq, 2) - 2]->discont_sequence;
         } else if (av_strstart(line, "#EXT-X-PLAYLIST-TYPE:", &ptr)) {
             ret = ensure_playlist(c, &pls, url);
             if (ret < 0)
@@ -874,6 +883,10 @@ static int parse_playlist(HLSContext *c, const char *url,
             int64_t timestamp;
             if (av_parse_time(&timestamp, ptr, 0) >= 0)
                 avpriv_dict_set_timestamp(&c->ctx->metadata, "creation_time", timestamp);
+        } else if (av_strstart(line, "#EXT-X-DISCONTINUITY-SEQUENCE:", &ptr)) {
+            discont_sequence = strtoll(ptr, NULL, 10);
+        } else if (!strcmp(line, "#EXT-X-DISCONTINUITY")) {
+            discont_sequence++;
         } else if (av_strstart(line, "#", NULL)) {
             continue;
         } else if (line[0]) {
@@ -948,6 +961,7 @@ static int parse_playlist(HLSContext *c, const char *url,
                 }
 
                 seg->init_section = cur_init_section;
+                seg->discont_sequence = discont_sequence;
 
                 current_stream_duration += duration;
             }
@@ -997,6 +1011,9 @@ fail:
 
 static struct segment *current_segment(struct playlist *pls)
 {
+    int n = pls->cur_seq_no - pls->start_seq_no;
+    if (n >= pls->n_segments)
+        return NULL;
     return pls->segments[pls->cur_seq_no - pls->start_seq_no];
 }
 
@@ -2154,6 +2171,29 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                             get_timebase(pls), AV_TIME_BASE_Q);
                 }
 
+                if (c->linearize_timestamps) {
+                    struct segment *seg = current_segment(pls);
+                    if (seg && seg->discont_sequence != pls->cur_discont_sequence &&
+                        pls->pkt.dts != AV_NOPTS_VALUE) {
+                        int64_t expected_ts = c->first_timestamp;
+                        int j;
+                        for (j = 0; j < pls->n_segments; j++) {
+                            if (pls->segments[j] == seg)
+                                break;
+                            expected_ts += pls->segments[j]->duration;
+                        }
+
+                        pls->cur_ts_offset =
+                            av_rescale_q(expected_ts, AV_TIME_BASE_Q, get_timebase(pls))
+                            - pls->pkt.dts;
+                    }
+
+                    if (pls->pkt.dts != AV_NOPTS_VALUE)
+                        pls->pkt.dts += pls->cur_ts_offset;
+                    if (pls->pkt.pts != AV_NOPTS_VALUE)
+                        pls->pkt.pts += pls->cur_ts_offset;
+                }
+
                 if (pls->seek_timestamp == AV_NOPTS_VALUE)
                     break;
 
@@ -2388,6 +2428,8 @@ static const AVOption hls_options[] = {
         OFFSET(current_stream_start_position), AV_OPT_TYPE_INT64, {.i64 = 0}, INT64_MIN, INT64_MAX, FLAGS},
     {"current_stream_duration", "read-only current duration",
         OFFSET(current_stream_duration), AV_OPT_TYPE_INT64, {.i64 = -1}, INT64_MIN, INT64_MAX, FLAGS},
+    {"linearize_timestamps", "Linearize timestamps across discontinuities",
+        OFFSET(linearize_timestamps), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
     {NULL}
 };
 

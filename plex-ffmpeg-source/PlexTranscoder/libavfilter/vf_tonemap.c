@@ -327,9 +327,9 @@ static int comput_trc_luts(TonemapContext *s, enum AVColorTransferCharacteristic
 {
     int i;
 
-    if (!s->lin_lut && !(s->lin_lut = calloc(32768, sizeof(float))))
+    if (!s->lin_lut && !(s->lin_lut = av_calloc(32768, sizeof(float))))
         return AVERROR(ENOMEM);
-    if (!s->delin_lut && !(s->delin_lut = calloc(32768, sizeof(uint16_t))))
+    if (!s->delin_lut && !(s->delin_lut = av_calloc(32768, sizeof(uint16_t))))
         return AVERROR(ENOMEM);
 
     for (i = 0; i < 32768; i++) {
@@ -346,7 +346,7 @@ static int compute_tonemap_lut(TonemapContext *s)
 {
     int i;
 
-    if (!s->tonemap_lut && !(s->tonemap_lut = calloc(32768, sizeof(float))))
+    if (!s->tonemap_lut && !(s->tonemap_lut = av_calloc(32768, sizeof(float))))
         return AVERROR(ENOMEM);
 
     for (i = 0; i < 32768; i++) {

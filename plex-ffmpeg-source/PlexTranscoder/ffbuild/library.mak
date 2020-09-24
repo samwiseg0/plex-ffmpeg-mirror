@@ -36,7 +36,7 @@ $(SUBDIR)%.o-$(NAME).o: $(SUBDIR)%.asm
 	-$$(if $$(ASMSTRIPFLAGS), $$(STRIP) $$(ASMSTRIPFLAGS) $$@)
 $(SUBDIR)lib$(NAME).ver:
 	$(Q)echo $(NAME)_1 "{ global: av_init_library; local: *; };" | $(VERSION_SCRIPT_POSTPROCESS_CMD) > $$@
-$(SUBDIR)$(SLIBNAME): $(filter-out $(OBJS-$(NAME):%=$(SUBDIR)%), $(OBJS)) $(OBJS-$(NAME):%=$(SUBDIR)%-$(NAME).o) $(SUBDIR)$(NAME)-extlib_init.o $(SUBDIR)lib$(NAME).ver $(FF_STATIC_DEP_LIBS)
+$(SUBDIR)$(SLIBNAME): $(OBJS-$(NAME):%=$(SUBDIR)%-$(NAME).o) $(SUBDIR)$(NAME)-extlib_init.o $(SUBDIR)lib$(NAME).ver $(FF_STATIC_DEP_LIBS)
 	$(SLIB_CREATE_DEF_CMD)
 	$$(LD) $(SHFLAGS) $(EXTLIBFLAGS) $(LDFLAGS) $(LDSOFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FF_STATIC_DEP_LIBS) $(FFEXTRALIBS)
 install-$(NAME): $(SUBDIR)$(SLIBNAME)

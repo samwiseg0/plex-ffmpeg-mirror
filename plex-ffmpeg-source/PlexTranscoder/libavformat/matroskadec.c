@@ -216,6 +216,13 @@ typedef struct MatroskaTrackOperation {
     EbmlList combine_planes;
 } MatroskaTrackOperation;
 
+typedef struct MatroskaBlockAdditionMapping {
+    int value;
+    char *name;
+    int type;
+    EbmlBin extradata;
+} MatroskaBlockAdditionMapping;
+
 typedef struct MatroskaTrack {
     uint64_t num;
     uint64_t uid;
@@ -240,6 +247,7 @@ typedef struct MatroskaTrack {
     int64_t end_timecode;
     int ms_compat;
     uint64_t max_block_additional_id;
+    EbmlList block_addition_mappings;
 
     uint32_t palette[AVPALETTE_COUNT];
     int has_palette;
@@ -528,6 +536,14 @@ static const EbmlSyntax matroska_track_operation[] = {
     { 0 }
 };
 
+static EbmlSyntax matroska_block_addition_mapping[] = {
+    { MATROSKA_ID_BLKADDIDVALUE,      EBML_UINT, 0, offsetof(MatroskaBlockAdditionMapping, value) },
+    { MATROSKA_ID_BLKADDIDNAME,       EBML_STR,  0, offsetof(MatroskaBlockAdditionMapping, name) },
+    { MATROSKA_ID_BLKADDIDTYPE,       EBML_UINT, 0, offsetof(MatroskaBlockAdditionMapping, type) },
+    { MATROSKA_ID_BLKADDIDEXTRADATA,  EBML_BIN,  0, offsetof(MatroskaBlockAdditionMapping, extradata) },
+    { 0 }
+};
+
 static const EbmlSyntax matroska_track[] = {
     { MATROSKA_ID_TRACKNUMBER,           EBML_UINT,  0, offsetof(MatroskaTrack, num) },
     { MATROSKA_ID_TRACKNAME,             EBML_UTF8,  0, offsetof(MatroskaTrack, name) },
@@ -546,6 +562,7 @@ static const EbmlSyntax matroska_track[] = {
     { MATROSKA_ID_TRACKOPERATION,        EBML_NEST,  0, offsetof(MatroskaTrack, operation),    { .n = matroska_track_operation } },
     { MATROSKA_ID_TRACKCONTENTENCODINGS, EBML_NEST,  0, 0,                                     { .n = matroska_track_encodings } },
     { MATROSKA_ID_TRACKMAXBLKADDID,      EBML_UINT,  0, offsetof(MatroskaTrack, max_block_additional_id) },
+    { MATROSKA_ID_TRACKBLKADDMAPPING,    EBML_NEST,  sizeof(MatroskaBlockAdditionMapping), offsetof(MatroskaTrack, block_addition_mappings), { .n = matroska_block_addition_mapping } },
     { MATROSKA_ID_SEEKPREROLL,           EBML_UINT,  0, offsetof(MatroskaTrack, seek_preroll) },
     { MATROSKA_ID_TRACKFLAGENABLED,      EBML_NONE },
     { MATROSKA_ID_TRACKFLAGLACING,       EBML_NONE },
@@ -2073,6 +2090,39 @@ static int mkv_parse_video_projection(AVStream *st, const MatroskaTrack *track) 
     return 0;
 }
 
+static int mkv_parse_dvcc_dvvc(AVStream *st, const MatroskaTrack *track,
+                               EbmlBin *bin, void *logctx)
+{
+    GetBitContext gb;
+    init_get_bits8(&gb, bin->data, bin->size);
+    return ff_mov_parse_dvcc_dvvc(st, &gb, logctx);
+}
+
+static int mkv_parse_block_addition_mappings(AVStream *st, const MatroskaTrack *track,
+                                             void *logctx)
+{
+    int i, ret;
+    const EbmlList *mappings_list = &track->block_addition_mappings;
+    MatroskaBlockAdditionMapping *mappings = mappings_list->elem;
+
+    for (i = 0; i < mappings_list->nb_elem; i++) {
+        MatroskaBlockAdditionMapping *mapping = &mappings[i];
+        switch (mapping->type) {
+        case MKBETAG('d','v','c','C'):
+        case MKBETAG('d','v','v','C'):
+            if ((ret = mkv_parse_dvcc_dvvc(st, track, &mapping->extradata, logctx)) < 0)
+                return ret;
+            break;
+        default:
+            av_log(logctx, AV_LOG_DEBUG,
+                   "Unknown block additional mapping type %i, value %i, name \"%s\"\n",
+                   mapping->type, mapping->value, mapping->name ? mapping->name : "");
+        }
+    }
+
+    return 0;
+}
+
 static int get_qt_codec(MatroskaTrack *track, uint32_t *fourcc, enum AVCodecID *codec_id)
 {
     const AVCodecTag *codec_tags;
@@ -2628,6 +2678,10 @@ static int matroska_parse_tracks(AVFormatContext *s)
             if (st->codecpar->codec_id == AV_CODEC_ID_ASS)
                 matroska->contains_ssa = 1;
         }
+
+        ret = mkv_parse_block_addition_mappings(st, track, matroska->ctx);
+        if (ret < 0)
+            return ret;
     }
 
     return 0;

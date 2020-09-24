@@ -28,6 +28,7 @@
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
 #include "libavutil/avassert.h"
+#include "libavutil/dovi_meta.h"
 #include "libavcodec/bytestream.h"
 #include "libavcodec/get_bits.h"
 #include "libavcodec/opus.h"
@@ -2128,67 +2129,53 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
             st->request_probe        = 0;
         }
         break;
-    case 0xb0: /* Dolby Vision descriptor */
+    case 0xb0: /* DOVI video stream descriptor */
         {
-            uint16_t flags1;
-            uint8_t compat, profile, level;
+            uint32_t buf;
+            AVDOVIDecoderConfigurationRecord *dovi;
+            size_t dovi_size;
+            int ret;
+            if (desc_end - *pp < 4) // (8 + 8 + 7 + 6 + 1 + 1 + 1) / 8
+                return AVERROR_INVALIDDATA;
 
-            get8(pp, desc_end); // major version
-            get8(pp, desc_end); // minor version
-            flags1 = get16(pp, desc_end); // 7b profile, 6b level, 1b rpu_present, 1b el_present, 1b bl_present
-            compat = get8(pp, desc_end) >> 4; // 4b bl compat ID, 4b reserved
+            dovi = av_dovi_alloc(&dovi_size);
+            if (!dovi)
+                return AVERROR(ENOMEM);
 
-            profile = flags1 >> 9;
-            level = (flags1 >> 3) & 0x3f;
-
-            av_dict_set_int(&st->metadata, "dolbyVisionProfile", profile, 0);
-            av_dict_set_int(&st->metadata, "dolbyVisionLevel", level, 0);
-            av_dict_set_int(&st->metadata, "dolbyVisionCompat", compat, 0);
-            av_dict_set_int(&st->metadata, "dolbyVisionRPU", ((flags1 >> 2) & 0x1), 0);
-            av_dict_set_int(&st->metadata, "dolbyVisionEL", ((flags1 >> 1) & 0x1), 0);
-            av_dict_set_int(&st->metadata, "dolbyVisionBL", (flags1 & 0x1), 0);
-
-            switch (profile) {
-            default: // Most existing profiles don't provide any information beyond what's in the compat ID
-                break;
-            case 5:
-                st->codecpar->color_space = AVCOL_SPC_ICTCP; // Actually "ITP", which is different; this is a placeholder
-                st->codecpar->color_trc = AVCOL_TRC_SMPTE2084;
-                st->codecpar->color_primaries = AVCOL_PRI_BT2020;
-                st->codecpar->chroma_location = AVCHROMA_LOC_LEFT;
-                st->codecpar->color_range = AVCOL_RANGE_JPEG;
-                break;
+            dovi->dv_version_major = get8(pp, desc_end);
+            dovi->dv_version_minor = get8(pp, desc_end);
+            buf = get16(pp, desc_end);
+            dovi->dv_profile        = (buf >> 9) & 0x7f;    // 7 bits
+            dovi->dv_level          = (buf >> 3) & 0x3f;    // 6 bits
+            dovi->rpu_present_flag  = (buf >> 2) & 0x01;    // 1 bit
+            dovi->el_present_flag   = (buf >> 1) & 0x01;    // 1 bit
+            dovi->bl_present_flag   =  buf       & 0x01;    // 1 bit
+            if (desc_end - *pp >= 20) {  // 4 + 4 * 4
+                buf = get8(pp, desc_end);
+                dovi->dv_bl_signal_compatibility_id = (buf >> 4) & 0x0f; // 4 bits
+            } else {
+                // 0 stands for None
+                // Dolby Vision V1.2.93 profiles and levels
+                dovi->dv_bl_signal_compatibility_id = 0;
             }
 
-            switch (compat) {
-            case 0:
-            default:
-                // "None"
-                break;
-            case 1: // "HDR10"
-            case 6: // "Ultra HD Blu-ray Disc HDR"
-                st->codecpar->color_space = AVCOL_SPC_BT2020_NCL;
-                st->codecpar->color_trc = AVCOL_TRC_SMPTE2084;
-                st->codecpar->color_primaries = AVCOL_PRI_BT2020;
-                break;
-            case 2:
-                st->codecpar->color_space = AVCOL_SPC_BT709;
-                st->codecpar->color_trc = AVCOL_TRC_BT709;
-                st->codecpar->color_primaries = AVCOL_PRI_BT709;
-                break;
-            case 3:
-            case 4:
-                st->codecpar->color_space = AVCOL_SPC_BT2020_NCL;
-                st->codecpar->color_trc = AVCOL_TRC_ARIB_STD_B67; // HLG
-                st->codecpar->color_primaries = AVCOL_PRI_BT2020;
-                break;
-            case 5: // "BT.1886"
-                st->codecpar->color_space = AVCOL_SPC_BT2020_NCL;
-                st->codecpar->color_trc = AVCOL_TRC_BT2020_10;
-                st->codecpar->color_primaries = AVCOL_PRI_BT2020;
-                break;
+            ret = av_stream_add_side_data(st, AV_PKT_DATA_DOVI_CONF,
+                                          (uint8_t *)dovi, dovi_size);
+            if (ret < 0) {
+                av_freep(dovi);
+                return ret;
             }
+
+            av_log(fc, AV_LOG_TRACE, "DOVI, version: %d.%d, profile: %d, level: %d, "
+                   "rpu flag: %d, el flag: %d, bl flag: %d, compatibility id: %d\n",
+                   dovi->dv_version_major, dovi->dv_version_minor,
+                   dovi->dv_profile, dovi->dv_level,
+                   dovi->rpu_present_flag,
+                   dovi->el_present_flag,
+                   dovi->bl_present_flag,
+                   dovi->dv_bl_signal_compatibility_id);
         }
+        break;
     default:
         break;
     }

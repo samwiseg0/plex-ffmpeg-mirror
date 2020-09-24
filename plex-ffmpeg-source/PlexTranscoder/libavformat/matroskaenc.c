@@ -1181,6 +1181,33 @@ static int mkv_write_stereo_mode(AVFormatContext *s, AVIOContext *pb,
     return ret;
 }
 
+static int mkv_write_dovi(AVFormatContext *s, AVIOContext *pb, AVStream *st)
+{
+    int ret;
+    AVDOVIDecoderConfigurationRecord *dovi = (AVDOVIDecoderConfigurationRecord *)
+                                             av_stream_get_side_data(st, AV_PKT_DATA_DOVI_CONF, NULL);
+
+    if (dovi) {
+        ebml_master mapping;
+        uint8_t buf[MOV_DVCC_DVVC_SIZE];
+        uint32_t type;
+        int size;
+
+        if ((ret = ff_mov_put_dvcc_dvvc(buf, sizeof(buf), &type, dovi, s)) < 0)
+            return ret;
+
+        size = ret;
+
+        mapping = start_ebml_master(pb, MATROSKA_ID_TRACKBLKADDMAPPING, 0);
+        put_ebml_uint(pb, MATROSKA_ID_BLKADDIDVALUE, 0);
+        put_ebml_uint(pb, MATROSKA_ID_BLKADDIDTYPE, type);
+        put_ebml_binary(pb, MATROSKA_ID_BLKADDIDEXTRADATA, buf, size);
+        end_ebml_master(pb, mapping);
+    }
+
+    return 0;
+}
+
 static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
                            int i, AVIOContext *pb, int default_stream_exists)
 {
@@ -1404,6 +1431,10 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
         if (ret < 0)
             return ret;
         end_ebml_master(pb, subinfo);
+
+        if ((ret = mkv_write_dovi(s, pb, st)) < 0)
+            return ret;
+
         break;
 
     case AVMEDIA_TYPE_AUDIO:

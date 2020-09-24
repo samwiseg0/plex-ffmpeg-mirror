@@ -212,7 +212,7 @@ void ff_get_yuv_coeffs(int16_t out[3][3][8], double (*table)[3],
     }
 }
 
-double ff_determine_signal_peak(AVFrame *in)
+double ff_determine_signal_peak(const AVFrame *in)
 {
     AVFrameSideData *sd = av_frame_get_side_data(in, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
     double peak = 0;
