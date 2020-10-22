@@ -994,7 +994,7 @@ static void do_subtitle_out(OutputFile *of,
                             OutputStream *ost,
                             AVSubtitle *sub)
 {
-    int subtitle_out_max_size = 1024 * 1024;
+    int subtitle_out_max_size = 2 * 1024 * 1024;
     int subtitle_out_size, nb, i;
     AVCodecContext *enc;
     AVPacket pkt;

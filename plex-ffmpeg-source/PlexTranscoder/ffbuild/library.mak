@@ -35,7 +35,8 @@ $(SUBDIR)%.o-$(NAME).o: $(SUBDIR)%.asm
 	$$(X86ASM) $$(X86ASMFLAGS) -I $$(<D)/ -o $$@ $$<
 	-$$(if $$(ASMSTRIPFLAGS), $$(STRIP) $$(ASMSTRIPFLAGS) $$@)
 $(SUBDIR)lib$(NAME).ver:
-	$(Q)echo $(NAME)_1 "{ global: av_init_library; local: *; };" | $(VERSION_SCRIPT_POSTPROCESS_CMD) > $$@
+	$(Q)printf "$(NAME)_1 {\n  global:\n    av_init_library;\n  local:\n    *;\n};" | $(VERSION_SCRIPT_POSTPROCESS_CMD) > $$@
+$(SUBDIR)$(SLIBNAME): OBJS = $(SUBDIR)$(NAME)-extlib_init.o # for SLIB_CREATE_DEF_CMD
 $(SUBDIR)$(SLIBNAME): $(OBJS-$(NAME):%=$(SUBDIR)%-$(NAME).o) $(SUBDIR)$(NAME)-extlib_init.o $(SUBDIR)lib$(NAME).ver $(FF_STATIC_DEP_LIBS)
 	$(SLIB_CREATE_DEF_CMD)
 	$$(LD) $(SHFLAGS) $(EXTLIBFLAGS) $(LDFLAGS) $(LDSOFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FF_STATIC_DEP_LIBS) $(FFEXTRALIBS)
@@ -90,6 +91,8 @@ $(SUBDIR)lib$(NAME).ver: $(SUBDIR)lib$(NAME).v $(OBJS)
 $(SUBDIR)$(SLIBNAME): $(SUBDIR)$(SLIBNAME_WITH_MAJOR)
 	$(Q)cd ./$(SUBDIR) && $(LN_S) $(SLIBNAME_WITH_MAJOR) $(SLIBNAME)
 
+MAKEDEF-OBJS-$(NAME) := $(OBJS)
+$(SUBDIR)$(SLIBNAME_WITH_MAJOR): OBJS := $$(MAKEDEF-OBJS-$(NAME))
 $(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(OBJS) $(SLIBOBJS) $(SUBDIR)lib$(NAME).ver
 	$(SLIB_CREATE_DEF_CMD)
 	$$(LD) $(SHFLAGS) $(LDFLAGS) $(LDSOFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FFEXTRALIBS)
