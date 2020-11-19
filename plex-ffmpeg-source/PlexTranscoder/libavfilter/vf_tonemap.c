@@ -113,6 +113,45 @@ static float mobius(float in, float j, double peak)
     return (b * b + 2.0f * b * j + j * j) / (b - a) * (in + a) / (in + b);
 }
 
+static float eotf_st2084(float x) {
+#define ST2084_MAX_LUMINANCE 10000.0f
+#define REFERENCE_WHITE 100.0f
+#define ST2084_M1 0.1593017578125f
+#define ST2084_M2 78.84375f
+#define ST2084_C1 0.8359375f
+#define ST2084_C2 18.8515625f
+#define ST2084_C3 18.6875f
+
+    float p = powf(x, 1.0f / ST2084_M2);
+    float a = FFMAX(p -ST2084_C1, 0.0f);
+    float b = FFMAX(ST2084_C2 - ST2084_C3 * p, 1e-6f);
+    float c  = powf(a / b, 1.0f / ST2084_M1);
+    return x > 0.0f ? c * ST2084_MAX_LUMINANCE / REFERENCE_WHITE : 0.0f;
+}
+
+static float inverse_eotf_st2084(float x) {
+    x *= REFERENCE_WHITE / ST2084_MAX_LUMINANCE;
+    x = powf(x, ST2084_M1);
+    x = (ST2084_C1 + ST2084_C2 * x) / (1.0f + ST2084_C3 * x);
+    return powf(x, ST2084_M2);
+}
+
+static float bt2390(float sig_orig, double peak)
+{
+    float sig_pq = sig_orig / peak;
+    float maxLum = 0.751829f / peak; // SDR peak in PQ
+
+    float ks = 1.5f * maxLum - 0.5f;
+    float tb = (sig_pq - ks) / (1.0f - ks);
+    float tb2 = tb * tb;
+    float tb3 = tb2 * tb;
+    float pb = (2.0f * tb3 - 3.0f * tb2 + 1.0f) * ks +
+               (tb3 - 2.0f * tb2 + tb) * (1.0f - ks) +
+               (-2.0f * tb3 + 3.0f * tb2) * maxLum;
+    float sig = (sig_pq < ks) ? sig_pq : pb;
+    return eotf_st2084(sig * peak);
+}
+
 static float mapsig(enum TonemapAlgorithm alg, float sig, double peak, double param)
 {
     switch(alg) {
@@ -139,14 +178,17 @@ static float mapsig(enum TonemapAlgorithm alg, float sig, double peak, double pa
     case TONEMAP_MOBIUS:
         sig = mobius(sig, param, peak);
         break;
+    case TONEMAP_BT2390:
+        sig = bt2390(sig, peak);
+        break;
     }
 
     return sig;
 }
 
 #define MIX(x,y,a) (x) * (1 - (a)) + (y) * (a)
-static void tonemap(float r_in, float b_in, float g_in,
-                    float *r_out, float *b_out, float *g_out,
+static void tonemap(float r_in, float g_in, float b_in,
+                    float *r_out, float *g_out, float *b_out,
                     double param, double desat, double peak,
                     const struct LumaCoefficients *coeffs,
                     enum TonemapAlgorithm alg)
@@ -155,8 +197,8 @@ static void tonemap(float r_in, float b_in, float g_in,
 
     /* load values */
     *r_out = r_in;
-    *b_out = b_in;
     *g_out = g_in;
+    *b_out = b_in;
 
     /* desaturate to prevent unnatural colors */
     if (desat > 0) {
@@ -182,28 +224,66 @@ static void tonemap(float r_in, float b_in, float g_in,
     *b_out *= sig / sig_orig;
 }
 
-#define MIX(x,y,a) (x) * (1 - (a)) + (y) * (a)
-static void tonemap_int16(int16_t r_in, int16_t b_in, int16_t g_in,
-                          int16_t *r_out, int16_t *b_out, int16_t *g_out,
-                          float *lin_lut, float *tonemap_lut, uint16_t *delin_lut)
+static void tonemap_int16(int16_t r_in, int16_t g_in, int16_t b_in,
+                          int16_t *r_out, int16_t *g_out, int16_t *b_out,
+                          float *lin_lut, float *tonemap_lut, uint16_t *delin_lut,
+                          const struct LumaCoefficients *coeffs,
+                          const struct LumaCoefficients *ocoeffs, double desat,
+                          double (*rgb2rgb)[3][3])
 {
     int16_t sig;
 
     /* load values */
     *r_out = r_in;
-    *b_out = b_in;
     *g_out = g_in;
+    *b_out = b_in;
 
     /* pick the brightest component, reducing the value range as necessary
      * to keep the entire signal in range and preventing discoloration due to
      * out-of-bounds clipping */
-    sig = FFMAX3(*r_out, *g_out, *b_out);
+    sig = FFMAX3(r_in, g_in, b_in);
 
     float mapval = tonemap_lut[av_clip_uintp2(sig + 2048, 15)];
 
-    *r_out = delin_lut[av_clip_uintp2(lin_lut[av_clip_uintp2(*r_out + 2048, 15)] * mapval * 32767 + 0.5, 15)];
-    *g_out = delin_lut[av_clip_uintp2(lin_lut[av_clip_uintp2(*g_out + 2048, 15)] * mapval * 32767 + 0.5, 15)];
-    *b_out = delin_lut[av_clip_uintp2(lin_lut[av_clip_uintp2(*b_out + 2048, 15)] * mapval * 32767 + 0.5, 15)];
+    float r_lin = lin_lut[av_clip_uintp2(r_in + 2048, 15)];
+    float g_lin = lin_lut[av_clip_uintp2(g_in + 2048, 15)];
+    float b_lin = lin_lut[av_clip_uintp2(b_in + 2048, 15)];
+
+    r_lin *= mapval;
+    g_lin *= mapval;
+    b_lin *= mapval;
+
+    /* desaturate to prevent unnatural colors */
+    if (desat > 0) {
+        float luma = coeffs->cr * r_lin + coeffs->cg * g_lin + coeffs->cb * b_lin;
+        float overbright = FFMAX(luma - desat, 1e-6) / FFMAX(luma, 1e-6);
+        r_lin = MIX(r_lin, luma, overbright);
+        g_lin = MIX(g_lin, luma, overbright);
+        b_lin = MIX(b_lin, luma, overbright);
+    }
+
+    r_lin = (*rgb2rgb)[0][0] * r_lin + (*rgb2rgb)[0][1] * g_lin + (*rgb2rgb)[0][2] * b_lin;
+    g_lin = (*rgb2rgb)[1][0] * r_lin + (*rgb2rgb)[1][1] * g_lin + (*rgb2rgb)[1][2] * b_lin;
+    b_lin = (*rgb2rgb)[2][0] * r_lin + (*rgb2rgb)[2][1] * g_lin + (*rgb2rgb)[2][2] * b_lin;
+
+    /*float cmin = FFMIN(FFMIN(r_lin, g_lin), b_lin);
+    if (cmin < 0.0) {
+        float luma = ocoeffs->cr * r_lin + ocoeffs->cg * g_lin + ocoeffs->cb * b_lin;
+        float coeff = cmin / (cmin - luma);
+        r_lin = MIX(r_lin, luma, coeff);
+        g_lin = MIX(g_lin, luma, coeff);
+        b_lin = MIX(b_lin, luma, coeff);
+    }
+    float cmax = FFMAX(FFMAX(r_lin, g_lin), b_lin);
+    if (cmax > 1.0) {
+        r_lin /= cmax;
+        g_lin /= cmax;
+        b_lin /= cmax;
+    }*/
+
+    *r_out = delin_lut[av_clip_uintp2(r_lin * 32767 + 0.5, 15)];
+    *g_out = delin_lut[av_clip_uintp2(g_lin * 32767 + 0.5, 15)];
+    *b_out = delin_lut[av_clip_uintp2(b_lin * 32767 + 0.5, 15)];
 }
 
 void ff_tonemap_frame_p010_nv12_c(uint8_t *dsty, uint8_t *dstuv, const uint16_t *srcy, const uint16_t *srcuv, const int *dstlinesize, const int *srclinesize, int width, int height, const struct TonemapIntParams *params)
@@ -260,13 +340,17 @@ void ff_tonemap_frame_p010_nv12_c(uint8_t *dsty, uint8_t *dstuv, const uint16_t 
             b[3] = av_clip_int16((y11 * cy + cbu * u + in_rnd) >> in_sh);
 
             tonemap_int16(r[0], g[0], b[0], &r[0], &g[0], &b[0],
-                          params->lin_lut, params->tonemap_lut, params->delin_lut);
+                          params->lin_lut, params->tonemap_lut, params->delin_lut,
+                          params->coeffs, params->ocoeffs, params->desat, params->rgb2rgb_coeffs);
             tonemap_int16(r[1], g[1], b[1], &r[1], &g[1], &b[1],
-                          params->lin_lut, params->tonemap_lut, params->delin_lut);
+                          params->lin_lut, params->tonemap_lut, params->delin_lut,
+                          params->coeffs, params->ocoeffs, params->desat, params->rgb2rgb_coeffs);
             tonemap_int16(r[2], g[2], b[2], &r[2], &g[2], &b[2],
-                          params->lin_lut, params->tonemap_lut, params->delin_lut);
+                          params->lin_lut, params->tonemap_lut, params->delin_lut,
+                          params->coeffs, params->ocoeffs, params->desat, params->rgb2rgb_coeffs);
             tonemap_int16(r[3], g[3], b[3], &r[3], &g[3], &b[3],
-                          params->lin_lut, params->tonemap_lut, params->delin_lut);
+                          params->lin_lut, params->tonemap_lut, params->delin_lut,
+                          params->coeffs, params->ocoeffs, params->desat, params->rgb2rgb_coeffs);
 
 
             int r00 = r[0], g00 = g[0], b00 = b[0];
@@ -302,22 +386,6 @@ void ff_tonemap_frame_p010_nv12_c(uint8_t *dsty, uint8_t *dstuv, const uint16_t 
     }
 }
 
-static float eotf_st2084(float x) {
-#define ST2084_MAX_LUMINANCE 10000.0f
-#define REFERENCE_WHITE 100.0f
-#define ST2084_M1 0.1593017578125f
-#define ST2084_M2 78.84375f
-#define ST2084_C1 0.8359375f
-#define ST2084_C2 18.8515625f
-#define ST2084_C3 18.6875f
-
-    float p = powf(x, 1.0f / ST2084_M2);
-    float a = FFMAX(p -ST2084_C1, 0.0f);
-    float b = FFMAX(ST2084_C2 - ST2084_C3 * p, 1e-6f);
-    float c  = powf(a / b, 1.0f / ST2084_M1);
-    return x > 0.0f ? c * ST2084_MAX_LUMINANCE / REFERENCE_WHITE : 0.0f;
-}
-
 static float inverse_eotf_bt1886(float c) {
     return c < 0.0f ? 0.0f : powf(c, 1.0f / 2.4f);
 }
@@ -345,16 +413,20 @@ static int comput_trc_luts(TonemapContext *s, enum AVColorTransferCharacteristic
 static int compute_tonemap_lut(TonemapContext *s)
 {
     int i;
+    double peak = s->lut_peak;
 
     if (!s->tonemap_lut && !(s->tonemap_lut = av_calloc(32768, sizeof(float))))
         return AVERROR(ENOMEM);
 
+    if (s->tonemap == TONEMAP_BT2390)
+        peak = inverse_eotf_st2084(peak);
+
     for (i = 0; i < 32768; i++) {
         double v = (i - 2048.0) / 28672.0;
         double lin = eotf_st2084(v);
-        float mapped = mapsig(s->tonemap, lin, s->lut_peak, s->param);
+        double mapval = s->tonemap == TONEMAP_BT2390 ? v : lin;
+        float mapped = mapsig(s->tonemap, mapval, peak, s->param);
         s->tonemap_lut[i] = (lin > 0 && mapped > 0) ? mapped / lin : 0;
-        //printf("%f, %f / %f = %f, %i * %i = %u => %u\n", v, mapped, lin, mapped / lin, s->lin_lut[i], s->tonemap_lut[i], (unsigned)s->lin_lut[i] * s->tonemap_lut[i], (unsigned)s->lin_lut[i] * s->tonemap_lut[i] + (1 << 16) >> 17);
     }
 
     return 0;
@@ -362,6 +434,7 @@ static int compute_tonemap_lut(TonemapContext *s)
 
 static int compute_yuv_coeffs(TonemapContext *s,
                               const struct LumaCoefficients *coeffs,
+                              const struct LumaCoefficients *ocoeffs,
                               const AVPixFmtDescriptor *idesc,
                               const AVPixFmtDescriptor *odesc,
                               enum AVColorRange irng,
@@ -382,6 +455,7 @@ static int compute_yuv_coeffs(TonemapContext *s,
 
     ff_fill_rgb2yuv_table(coeffs, rgb2yuv);
     ff_matrix_invert_3x3(rgb2yuv, yuv2rgb);
+    ff_fill_rgb2yuv_table(ocoeffs, rgb2yuv);
 
     ff_get_yuv_coeffs(s->yuv2rgb_coeffs, yuv2rgb, idesc->comp[0].depth,
                       y_rng, uv_rng, 1);
@@ -397,6 +471,37 @@ static int compute_yuv_coeffs(TonemapContext *s,
 
     ff_get_yuv_coeffs(s->rgb2yuv_coeffs, rgb2yuv, odesc->comp[0].depth,
                       y_rng, uv_rng, 0);
+
+    return 0;
+}
+
+
+static int compute_rgb_coeffs(TonemapContext *s,
+                              enum AVColorPrimaries iprm,
+                              enum AVColorPrimaries oprm)
+{
+    double rgb2xyz[3][3], xyz2rgb[3][3];
+    const struct WhitepointCoefficients wp = { 0.3127, 0.3290 };
+    const struct PrimaryCoefficients *icoeff = ff_get_color_primaries(iprm);
+    const struct PrimaryCoefficients *ocoeff = ff_get_color_primaries(oprm);
+
+    if (!icoeff) {
+        av_log(s, AV_LOG_ERROR,
+               "Unsupported input color primaries %d (%s)\n",
+               iprm, av_color_primaries_name(iprm));
+        return AVERROR(EINVAL);
+    }
+    if (!ocoeff) {
+        av_log(s, AV_LOG_ERROR,
+               "Unsupported output color primaries %d (%s)\n",
+               oprm, av_color_primaries_name(oprm));
+        return AVERROR(EINVAL);
+    }
+
+    ff_fill_rgb2xyz_table(ocoeff, &wp, rgb2xyz);
+    ff_matrix_invert_3x3(rgb2xyz, xyz2rgb);
+    ff_fill_rgb2xyz_table(icoeff, &wp, rgb2xyz);
+    ff_matrix_mul_3x3(s->rgb2rgb_coeffs, rgb2xyz, xyz2rgb);
 
     return 0;
 }
@@ -435,6 +540,10 @@ static int filter_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             .out_yuv_off    = s->out_yuv_off,
             .yuv2rgb_coeffs = &s->yuv2rgb_coeffs,
             .rgb2yuv_coeffs = &s->rgb2yuv_coeffs,
+            .rgb2rgb_coeffs = &s->rgb2rgb_coeffs,
+            .coeffs         = s->coeffs,
+            .ocoeffs        = s->ocoeffs,
+            .desat          = s->desat,
         };
         s->tonemap_frame_p010_nv12(out->data[0] + out->linesize[0] * slice_start,
                                    out->data[1] + out->linesize[1] * AV_CEIL_RSHIFT(slice_start, desc->log2_chroma_h),
@@ -509,7 +618,9 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
         } else if (in->color_trc != AVCOL_TRC_SMPTEST2084)
             av_log(s, AV_LOG_WARNING, "Tonemapping works on PQ only\n");
 
-        out->color_trc = AVCOL_TRC_BT709;
+        out->color_trc       = AVCOL_TRC_BT709;
+        out->colorspace      = AVCOL_SPC_BT709;
+        out->color_primaries = AVCOL_PRI_BT709;
 
         if (!s->lin_lut || !s->delin_lut) {
             if ((ret = comput_trc_luts(s, in->color_trc, out->color_trc)) < 0)
@@ -523,8 +634,14 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
         }
 
         if (s->coeffs != coeffs) {
-            if ((ret = compute_yuv_coeffs(s, coeffs, desc, odesc,
+            enum AVColorPrimaries iprm = in->color_primaries;
+            s->ocoeffs = ff_get_luma_coefficients(out->colorspace);
+            if ((ret = compute_yuv_coeffs(s, coeffs, s->ocoeffs, desc, odesc,
                  in->color_range, out->color_range)) < 0)
+                goto fail;
+            if (iprm == AVCOL_PRI_UNSPECIFIED)
+                iprm = AVCOL_PRI_BT2020;
+            if ((ret = compute_rgb_coeffs(s, iprm, out->color_primaries)) < 0)
                 goto fail;
         }
     }
@@ -571,7 +688,7 @@ static void uninit(AVFilterContext *ctx)
 #define OFFSET(x) offsetof(TonemapContext, x)
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_FILTERING_PARAM
 static const AVOption tonemap_options[] = {
-    { "tonemap",      "tonemap algorithm selection", OFFSET(tonemap), AV_OPT_TYPE_INT, {.i64 = TONEMAP_NONE}, TONEMAP_NONE, TONEMAP_MAX - 1, FLAGS, "tonemap" },
+    { "tonemap",      "tonemap algorithm selection", OFFSET(tonemap), AV_OPT_TYPE_INT, {.i64 = TONEMAP_BT2390}, TONEMAP_NONE, TONEMAP_MAX - 1, FLAGS, "tonemap" },
     {     "none",     0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_NONE},              0, 0, FLAGS, "tonemap" },
     {     "linear",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_LINEAR},            0, 0, FLAGS, "tonemap" },
     {     "gamma",    0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_GAMMA},             0, 0, FLAGS, "tonemap" },
@@ -579,6 +696,7 @@ static const AVOption tonemap_options[] = {
     {     "reinhard", 0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_REINHARD},          0, 0, FLAGS, "tonemap" },
     {     "hable",    0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_HABLE},             0, 0, FLAGS, "tonemap" },
     {     "mobius",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_MOBIUS},            0, 0, FLAGS, "tonemap" },
+    {     "bt2390",   0, 0, AV_OPT_TYPE_CONST, {.i64 = TONEMAP_BT2390},            0, 0, FLAGS, "tonemap" },
     { "param",        "tonemap parameter", OFFSET(param), AV_OPT_TYPE_DOUBLE, {.dbl = NAN}, DBL_MIN, DBL_MAX, FLAGS },
     { "desat",        "desaturation strength", OFFSET(desat), AV_OPT_TYPE_DOUBLE, {.dbl = 2}, 0, DBL_MAX, FLAGS },
     { "peak",         "signal peak override", OFFSET(peak), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, 0, DBL_MAX, FLAGS },

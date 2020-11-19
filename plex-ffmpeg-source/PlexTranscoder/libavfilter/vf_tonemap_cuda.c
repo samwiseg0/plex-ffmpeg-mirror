@@ -535,10 +535,10 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
         s->in_spc        = in->colorspace;
         s->in_chroma_loc = in->chroma_location;
 
-        s->out_range      = s->in_range;
+        s->out_range      = AVCOL_RANGE_MPEG;
         s->out_trc        = AVCOL_TRC_BT709;
-        s->out_pri        = s->in_pri;
-        s->out_spc        = s->in_spc;
+        s->out_pri        = AVCOL_PRI_BT709;
+        s->out_spc        = AVCOL_SPC_BT709;
         s->out_chroma_loc = s->in_chroma_loc;
 
         if ((ret = compile(link)) < 0)

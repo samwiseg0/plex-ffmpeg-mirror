@@ -45,6 +45,7 @@ void ff_fill_rgb2xyz_table(const struct PrimaryCoefficients *coeffs,
                            double rgb2xyz[3][3]);
 
 const struct LumaCoefficients *ff_get_luma_coefficients(enum AVColorSpace csp);
+const struct PrimaryCoefficients *ff_get_color_primaries(enum AVColorPrimaries prm);
 void ff_fill_rgb2yuv_table(const struct LumaCoefficients *coeffs,
                            double rgb2yuv[3][3]);
 int ff_get_range_off(int *off, int *y_rng, int *uv_rng,

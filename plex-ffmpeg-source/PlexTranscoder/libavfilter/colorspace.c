@@ -139,6 +139,33 @@ const struct LumaCoefficients *ff_get_luma_coefficients(enum AVColorSpace csp)
     return coeffs;
 }
 
+static const struct PrimaryCoefficients color_primaries[AVCOL_PRI_NB] = {
+    [AVCOL_PRI_BT709]     = { 0.640, 0.330, 0.300, 0.600, 0.150, 0.060 },
+    [AVCOL_PRI_BT470M]    = { 0.670, 0.330, 0.210, 0.710, 0.140, 0.080 },
+    [AVCOL_PRI_BT470BG]   = { 0.640, 0.330, 0.290, 0.600, 0.150, 0.060 },
+    [AVCOL_PRI_SMPTE170M] = { 0.630, 0.340, 0.310, 0.595, 0.155, 0.070 },
+    [AVCOL_PRI_SMPTE240M] = { 0.630, 0.340, 0.310, 0.595, 0.155, 0.070 },
+    [AVCOL_PRI_SMPTE428]  = { 0.735, 0.265, 0.274, 0.718, 0.167, 0.009 },
+    [AVCOL_PRI_SMPTE431]  = { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060 },
+    [AVCOL_PRI_SMPTE432]  = { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060 },
+    [AVCOL_PRI_FILM]      = { 0.681, 0.319, 0.243, 0.692, 0.145, 0.049 },
+    [AVCOL_PRI_BT2020]    = { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046 },
+    [AVCOL_PRI_JEDEC_P22] = { 0.630, 0.340, 0.295, 0.605, 0.155, 0.077 },
+};
+
+const struct PrimaryCoefficients *ff_get_color_primaries(enum AVColorPrimaries prm)
+{
+    const struct PrimaryCoefficients *p;
+
+    if (prm >= AVCOL_PRI_NB)
+        return NULL;
+    p = &color_primaries[prm];
+    if (!p->xr)
+        return NULL;
+
+    return p;
+}
+
 void ff_fill_rgb2yuv_table(const struct LumaCoefficients *coeffs,
                            double rgb2yuv[3][3])
 {

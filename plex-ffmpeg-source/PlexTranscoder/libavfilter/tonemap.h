@@ -32,6 +32,7 @@ enum TonemapAlgorithm {
     TONEMAP_REINHARD,
     TONEMAP_HABLE,
     TONEMAP_MOBIUS,
+    TONEMAP_BT2390,
     TONEMAP_MAX,
 };
 
@@ -43,6 +44,9 @@ typedef struct TonemapIntParams {
     int in_yuv_off, out_yuv_off;
     int16_t (*yuv2rgb_coeffs)[3][3][8];
     int16_t (*rgb2yuv_coeffs)[3][3][8];
+    double  (*rgb2rgb_coeffs)[3][3];
+    const struct LumaCoefficients *coeffs, *ocoeffs;
+    double desat;
 } TonemapIntParams;
 
 typedef struct TonemapContext {
@@ -53,7 +57,7 @@ typedef struct TonemapContext {
     double desat;
     double peak;
 
-    const struct LumaCoefficients *coeffs;
+    const struct LumaCoefficients *coeffs, *ocoeffs;
 
     void (*tonemap_frame_p010_nv12)(uint8_t *dsty, uint8_t *dstuv, const uint16_t *src, const uint16_t *srcuv, const int *dstlinesize, const int *srclinesize, int width, int height, const struct TonemapIntParams *params);
 
@@ -65,6 +69,7 @@ typedef struct TonemapContext {
 
     DECLARE_ALIGNED(16, int16_t, yuv2rgb_coeffs)[3][3][8];
     DECLARE_ALIGNED(16, int16_t, rgb2yuv_coeffs)[3][3][8];
+    DECLARE_ALIGNED(16, double,  rgb2rgb_coeffs)[3][3];
 } TonemapContext;
 
 void ff_tonemap_frame_p010_nv12_c(uint8_t *dsty, uint8_t *dstuv, const uint16_t *src, const uint16_t *srcuv, const int *dstlinesize, const int *srclinesize, int width, int height, const struct TonemapIntParams *params);
