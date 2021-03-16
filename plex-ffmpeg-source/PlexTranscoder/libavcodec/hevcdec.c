@@ -353,7 +353,7 @@ static void export_stream_params(AVCodecContext *avctx, const HEVCParamSets *ps,
                   num, den, 1 << 30);
 }
 
-static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps, int reinit)
+static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
 {
 #define HWACCEL_MAX (CONFIG_HEVC_DXVA2_HWACCEL + \
                      CONFIG_HEVC_D3D11VA_HWACCEL * 2 + \
@@ -416,11 +416,6 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps, int rei
 
     *fmt++ = sps->pix_fmt;
     *fmt = AV_PIX_FMT_NONE;
-
-    if (!reinit)
-        for (fmt = pix_fmts; *fmt != AV_PIX_FMT_NONE; fmt++)
-            if (*fmt == s->avctx->pix_fmt)
-                return *fmt;
 
     return ff_thread_get_format(s->avctx, pix_fmts);
 }
@@ -519,15 +514,9 @@ static int hls_slice_header(HEVCContext *s)
         sh->no_output_of_prior_pics_flag = 1;
 
     if (s->ps.sps != (HEVCSPS*)s->ps.sps_list[s->ps.pps->sps_id]->data) {
-        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(s->avctx->pix_fmt);
-        int must_reinit;
         const HEVCSPS *sps = (HEVCSPS*)s->ps.sps_list[s->ps.pps->sps_id]->data;
         const HEVCSPS *last_sps = s->ps.sps;
         enum AVPixelFormat pix_fmt;
-
-        must_reinit = (desc && !(desc->flags & AV_PIX_FMT_FLAG_HWACCEL)) ||
-                      s->avctx->coded_width  != sps->width ||
-                      s->avctx->coded_height != sps->height; //FIXME: depth/subsampling changes
 
         if (last_sps && IS_IRAP(s) && s->nal_unit_type != HEVC_NAL_CRA_NUT) {
             if (sps->width != last_sps->width || sps->height != last_sps->height ||
@@ -541,7 +530,7 @@ static int hls_slice_header(HEVCContext *s)
         if (ret < 0)
             return ret;
 
-        pix_fmt = get_format(s, sps, must_reinit);
+        pix_fmt = get_format(s, sps);
         if (pix_fmt < 0)
             return pix_fmt;
         s->avctx->pix_fmt = pix_fmt;

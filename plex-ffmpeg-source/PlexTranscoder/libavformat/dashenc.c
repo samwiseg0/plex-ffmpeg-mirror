@@ -440,7 +440,7 @@ static void get_start_index_number(OutputStream *os, DASHContext *c,
     *start_number = 1;
     if (c->window_size) {
         *start_index  = FFMAX(os->nb_segments   - c->window_size, 0);
-        *start_number = FFMAX(os->segment_index - c->window_size, 1);
+        *start_number = FFMAX(os->segment_index - c->window_size, c->skip_to_segment);
     }
 }
 
