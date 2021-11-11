@@ -49,6 +49,19 @@ static const AVOption weave_options[] = {
 
 AVFILTER_DEFINE_CLASS(weave);
 
+static int query_formats(AVFilterContext *ctx)
+{
+    AVFilterFormats *formats = NULL;
+    int ret;
+
+    ret = ff_formats_pixdesc_filter(&formats, 0,
+                                    AV_PIX_FMT_FLAG_PAL |
+                                    AV_PIX_FMT_FLAG_HWACCEL);
+    if (ret < 0)
+        return ret;
+    return ff_set_common_formats(ctx, formats);
+}
+
 static int config_props_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
@@ -156,6 +169,7 @@ AVFilter ff_vf_weave = {
     .description   = NULL_IF_CONFIG_SMALL("Weave input video fields into frames."),
     .priv_size     = sizeof(WeaveContext),
     .priv_class    = &weave_class,
+    .query_formats = query_formats,
     .uninit        = uninit,
     .inputs        = weave_inputs,
     .outputs       = weave_outputs,
@@ -179,6 +193,7 @@ AVFilter ff_vf_doubleweave = {
     .description   = NULL_IF_CONFIG_SMALL("Weave input video fields into double number of frames."),
     .priv_size     = sizeof(WeaveContext),
     .priv_class    = &doubleweave_class,
+    .query_formats = query_formats,
     .init          = init,
     .uninit        = uninit,
     .inputs        = weave_inputs,

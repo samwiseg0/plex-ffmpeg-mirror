@@ -46,7 +46,7 @@
 #include "dither_matrix.h"
 #include "formats.h"
 #include "internal.h"
-#include "scale.h"
+#include "scale_eval.h"
 #include "video.h"
 
 static const enum AVPixelFormat supported_formats[] = {

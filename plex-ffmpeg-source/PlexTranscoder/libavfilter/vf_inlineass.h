@@ -1,6 +1,6 @@
 /*
  * inlineass filter
- * Copyright (c) 2016 Rodger Combs
+ * Copyright (c) 2016 rcombs
  *
  * This file is part of FFmpeg.
  *

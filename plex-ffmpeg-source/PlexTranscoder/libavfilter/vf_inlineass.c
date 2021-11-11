@@ -43,11 +43,16 @@ typedef struct {
     ASS_Track *track;
 
     char *font_path;
+    char *font_name;
+    char *overrides;
+    int apply_overrides;
     char *fonts_dir;
     char *fc_file;
     double font_scale;
     double font_size;
-    int margin;
+    double outline;
+    double shadow;
+    double marginH, marginV;
     int atsc_cc;
     char *language;
 
@@ -686,55 +691,109 @@ void avfilter_inlineass_set_fonts(AVFilterContext *context)
     ass_set_fonts(ass->renderer, ass->font_path, "DejaVu Sans", 1, ass->fc_file, 1);
 }
 
-static void process_header(AVFilterContext *link, AVCodecContext *dec_ctx)
+static int process_header(AVFilterContext *link, AVCodecContext *dec_ctx)
 {
+    int ret = 0;
     AssContext *ass = link->priv;
     ASS_Track *track = ass->track;
     enum AVCodecID codecID = dec_ctx->codec_id;
 
     if (!track)
-        return;
+        return AVERROR(EINVAL);
 
     if (codecID == AV_CODEC_ID_ASS) {
         ass_process_codec_private(track, dec_ctx->extradata,
                                   dec_ctx->extradata_size);
     } else {
-        ASS_Style *style = NULL;
-        int sid = 0;
-
         /* Decode subtitles and push them into the renderer (libass) */
         if (dec_ctx->subtitle_header)
             ass_process_codec_private(track,
                                       dec_ctx->subtitle_header,
                                       dec_ctx->subtitle_header_size);
 
-        style = &ass->track->styles[sid];
         if (!ass->track->n_styles) {
-            sid = ass_alloc_style(track);
+            int sid = ass_alloc_style(track);
+            if (sid < 0)
+                return AVERROR(ENOMEM);
+            ASS_Style *style = &ass->track->styles[sid];
             style = &ass->track->styles[sid];
             style->Name             = strdup("Default");
-            style->PrimaryColour    = 0xffffff00;
-            style->SecondaryColour  = 0x00ffff00;
-            style->OutlineColour    = 0x00000000;
-            style->BackColour       = 0x00000080;
-            style->Bold             = 200;
+            style->FontName         = strdup(ass->font_name);
+            style->FontSize         = ass->font_size * track->PlayResY / 720.;
+            style->PrimaryColour    = 0xffffff00U;
+            style->SecondaryColour  = 0x00ffff00U;
+            style->OutlineColour    = 0x13070200U;
+            style->BackColour       = 0x00000033U;
+            style->Bold             = 500;
             style->ScaleX           = 1.0;
             style->ScaleY           = 1.0;
             style->Spacing          = 0;
             style->BorderStyle      = 1;
-            style->Outline          = 2;
-            style->Shadow           = 3;
+            style->Outline          = ass->outline * track->PlayResY / 720.;
+            style->Shadow           = ass->shadow * track->PlayResY / 720.;
             style->Alignment        = 2;
+            style->MarginL = style->MarginR = ass->marginH * track->PlayResY / 720.;
+            style->MarginV = ass->marginV * track->PlayResY / 720.;
+
+            track->default_style = sid;
+        }
+    }
+
+    if (ass->apply_overrides && (codecID != AV_CODEC_ID_ASS || ass->apply_overrides > 0)) {
+        const char *inp = ass->overrides;
+        char** list = NULL;
+        int list_nb = 0;
+
+        while (inp && inp[0]) {
+            char* tok = av_get_token(&inp, ",");
+            if (!tok)
+                goto fail;
+
+            if ((ret = av_dynarray_add_nofree(&list, &list_nb, tok)) < 0) {
+                av_free(tok);
+                goto fail;
+            }
+
+            if (*inp)
+                inp++;
         }
 
-        style->FontName         = strdup("DejaVu Sans");
-        style->FontSize         = ass->font_size;
-        style->MarginL = style->MarginR = style->MarginV = ass->margin;
+#define ADD(a, b, c) do { \
+    char* tok = av_asprintf(#a "=" b, (c)); \
+    if (!tok) \
+        goto fail; \
+    ret = av_dynarray_add_nofree(&list, &list_nb, tok); \
+    if (ret < 0) { \
+        av_free(tok); \
+        goto fail; \
+    } \
+} while (0)
 
-        track->default_style = sid;
+#define ADD2(a, b) ADD(a, "%f", ((ass->b) * (double)track->PlayResY / 720.))
+
+        ADD2(Outline, outline);
+        ADD2(Shadow, shadow);
+        ADD2(FontSize, font_size);
+        ADD2(MarginL, marginH);
+        ADD2(MarginR, marginH);
+        ADD2(MarginV, marginV);
+
+        if ((ret = av_dynarray_add_nofree(&list, &list_nb, NULL)) < 0)
+            goto fail;
+
+        ass_set_style_overrides(ass->library, list);
+
+fail:
+        for (int i = 0; i < list_nb; i++)
+            av_free(list[i]);
+        av_free(list);
+
+        ass_process_force_style(track);
     }
 
     ass->got_header = 1;
+
+    return ret;
 }
 
 void avfilter_inlineass_append_data(AVFilterContext *link, AVCodecContext *dec_ctx,
@@ -757,11 +816,25 @@ void avfilter_inlineass_append_data(AVFilterContext *link, AVCodecContext *dec_c
     }
 }
 
+#define DEFAULT_OVERRIDES \
+    "ScaledBorderAndShadow=yes," \
+    "FontName=Noto Sans Medium," \
+    "Bold=500," \
+    "PrimaryColour=&H00FFFFFF," \
+    "OutlineColour=&H00020713," \
+    "BackColour=&HCC000000" \
+
 static const AVOption inlineass_options[] = {
     {"font_scale",     "font scale factor",                OFFSET(font_scale), AV_OPT_TYPE_DOUBLE, {.dbl = 1.0 }, 0.0f,      100.0f,   FLAGS},
     {"font_path",      "path to default font",             OFFSET(font_path),  AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN,  CHAR_MAX, FLAGS},
-    {"font_size",      "default font size",                OFFSET(font_size),  AV_OPT_TYPE_DOUBLE, {.dbl = 18.0}, 0.0f,      100.0f,   FLAGS},
-    {"margin",         "default margin",                   OFFSET(margin),     AV_OPT_TYPE_INT64,  {.i64 = 20  }, INT64_MIN, INT64_MAX,FLAGS},
+    {"font_name",      "name of default font",             OFFSET(font_name),  AV_OPT_TYPE_STRING, {.str = "Noto Sans Medium"}, CHAR_MIN,  CHAR_MAX, FLAGS},
+    {"overrides",      "style overrides",                  OFFSET(overrides),  AV_OPT_TYPE_STRING, {.str = DEFAULT_OVERRIDES}, CHAR_MIN,  CHAR_MAX, FLAGS},
+    {"apply_overrides","whether to apply style overrides", OFFSET(apply_overrides),AV_OPT_TYPE_BOOL,{.i64 = -1 }, -1,        1,        FLAGS},
+    {"font_size",      "default font size",                OFFSET(font_size),  AV_OPT_TYPE_DOUBLE, {.dbl = 54},   0.0f,      100.0f,   FLAGS},
+    {"outline",        "default outline thickness",        OFFSET(outline),    AV_OPT_TYPE_DOUBLE, {.dbl = 2.6},  0.0f,      100.0f,   FLAGS},
+    {"shadow",         "default shadow offset",            OFFSET(shadow),     AV_OPT_TYPE_DOUBLE, {.dbl = 1.7},  0.0f,      100.0f,   FLAGS},
+    {"marginH",        "default horizontal margin",        OFFSET(marginH),    AV_OPT_TYPE_DOUBLE, {.dbl = 100},  0.0f,      6400.0f,  FLAGS},
+    {"marginV",        "default vertical margin",          OFFSET(marginV),    AV_OPT_TYPE_DOUBLE, {.dbl = 42 },  0.0f,      320.0f,   FLAGS},
     {"fonts_dir",      "directory to scan for fonts",      OFFSET(fonts_dir),  AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN,  CHAR_MAX, FLAGS},
     {"fontconfig_file","fontconfig file to load",          OFFSET(fc_file),    AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN,  CHAR_MAX, FLAGS},
     {"atsc_cc",        "burn ATSC closed captions",        OFFSET(atsc_cc),    AV_OPT_TYPE_BOOL,   {.i64 = 0   }, 0,         1,        FLAGS},

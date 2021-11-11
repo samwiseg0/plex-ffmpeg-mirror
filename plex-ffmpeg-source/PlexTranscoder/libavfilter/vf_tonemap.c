@@ -57,14 +57,14 @@ typedef struct ThreadData {
 static int query_formats(AVFilterContext *ctx)
 {
     AVFilterFormats *formats = ff_make_format_list(pix_fmts);
-    int res = ff_formats_ref(formats, &ctx->inputs[0]->out_formats);
+    int res = ff_formats_ref(formats, &ctx->inputs[0]->outcfg.formats);
     if (res < 0)
         return res;
     formats = NULL;
     res = ff_add_format(&formats, AV_PIX_FMT_NV12);
     if (res < 0)
         return res;
-    return ff_formats_ref(formats, &ctx->outputs[0]->in_formats);
+    return ff_formats_ref(formats, &ctx->outputs[0]->incfg.formats);
 }
 
 static av_cold int init(AVFilterContext *ctx)
@@ -576,13 +576,13 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
     AVFilterContext *ctx = link->dst;
     TonemapContext *s = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
+    ThreadData td;
     AVFrame *out;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(link->format);
     const AVPixFmtDescriptor *odesc = av_pix_fmt_desc_get(outlink->format);
     int ret;
     double peak = s->peak;
     const struct LumaCoefficients *coeffs = ff_get_luma_coefficients(in->colorspace);
-    ThreadData td;
 
     if (!desc || !odesc) {
         av_frame_free(&in);

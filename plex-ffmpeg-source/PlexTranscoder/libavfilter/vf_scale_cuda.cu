@@ -164,7 +164,8 @@ __global__ void Subsample_Bilinear_ ## NAME(cudaTextureObject_t tex, \
                                     DST *dst, \
                                     int dst_width, int dst_height, int dst_pitch, \
                                     int src_width, int src_height, \
-                                    cudaTextureObject_t ditherTex) \
+                                    cudaTextureObject_t ditherTex, \
+                                    int bit_depth, float param) \
 { \
     Subsample_Bilinear<SRC, DST, CONV, PITCH, SHIFT, DITHER>(tex, dst, dst_width, dst_height, dst_pitch, \
                                                              src_width, src_height, ditherTex); \

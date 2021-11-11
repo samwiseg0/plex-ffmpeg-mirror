@@ -20,6 +20,7 @@
 #include "checkasm.h"
 #include "libavfilter/bwdif.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem_internal.h"
 
 #define WIDTH 64
 #define HEIGHT 16

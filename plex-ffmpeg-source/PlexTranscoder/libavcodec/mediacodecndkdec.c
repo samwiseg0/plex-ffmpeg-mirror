@@ -255,7 +255,7 @@ static int mediacodecndk_receive(AVCodecContext *avctx, AVFrame* frame)
     }
 
     frame->buf[0] = av_buffer_create((void*)(intptr_t)out_index, out_size, mediacodecndk_free_buffer,
-                                     ref, BUFFER_FLAG_READONLY);
+                                     ref, AV_BUFFER_FLAG_READONLY);
     if (!frame->buf[0]) {
         av_buffer_unref(&ref);
         ret = AVERROR(ENOMEM);

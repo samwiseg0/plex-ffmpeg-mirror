@@ -36,8 +36,11 @@
 #include "libavutil/thread.h"
 #include "ac3_parser_internal.h"
 #include "avcodec.h"
+#include "decode.h"
+#include "encode.h"
 #include "internal.h"
 #include "mlp_parse.h"
+#include "packet_internal.h"
 
 #ifdef _WIN32
 #define PATHSEP "\\"
@@ -72,6 +75,7 @@ typedef struct eae_file {
 
 typedef struct EAEContext {
     AVClass *class;
+    AVFrame *frame;
 
     char *root;
     // The path the the target folder, including a unique prefix.
@@ -347,6 +351,10 @@ static int eae_encode_init(AVCodecContext *avctx)
     s->num_min_priming = 2;
 
     avctx->frame_size = 6 * 256; // AC3 + EAC3
+
+    s->frame = av_frame_alloc();
+    if (!s->frame)
+        return AVERROR(ENOMEM);
 
     return eae_common_init(avctx, folder);
 }
@@ -1208,14 +1216,26 @@ static int eae_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
     EAEContext *s = avctx->priv_data;
     int samples;
     int blocksize;
-    int err = eae_read_output(avctx);
+    int err = 0;
+
+    if (eae_need_input(avctx)) {
+        AVPacket pkt = {0};
+        err = ff_decode_get_packet(avctx, &pkt);
+
+        if (err >= 0 || err == AVERROR_EOF)
+            err = eae_decode_send_packet(avctx, pkt.size ? &pkt : NULL);
+
+        av_packet_unref(&pkt);
+
+        if (err < 0 && err != AVERROR_EOF && err != AVERROR(EAGAIN))
+            return err;
+    }
+
+    err = eae_read_output(avctx);
     if (err < 0)
         return err;
 
     av_assert0(s->output_buffer);
-
-    if ((err = ff_decode_frame_props(avctx, frame)) < 0)
-        return err;
 
     blocksize = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->channels;
     samples = s->output_buffer->size / blocksize;
@@ -1239,6 +1259,20 @@ static int eae_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
     if (samples != s->output_frames[0].frame_size && !s->eof)
         av_log(avctx, AV_LOG_WARNING, "EAE output unaligned (got %d, expected %d)\n",
                samples, s->output_frames[0].frame_size);
+
+    // Discard any leftover queued packets from our previous batch
+    while (avctx->internal->last_pkt_props->data &&
+           avctx->internal->last_pkt_props->pts < s->output_frames[0].pts &&
+           avctx->internal->pkt_props) {
+        av_packet_unref(avctx->internal->last_pkt_props);
+        err = avpriv_packet_list_get(&avctx->internal->pkt_props,
+                                     &avctx->internal->pkt_props_tail,
+                                     avctx->internal->last_pkt_props);
+        av_assert0(err != AVERROR(EAGAIN));
+    }
+
+    if ((err = ff_decode_frame_props(avctx, frame)) < 0)
+        return err;
 
     frame->buf[0] = av_buffer_ref(s->output_buffer);
     if (!frame->buf[0])
@@ -1284,7 +1318,25 @@ static int eae_encode_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
     int frame_size;
     uint8_t *frame_data;
     int64_t frame_pts;
-    int err = eae_read_output(avctx);
+    int err = AVERROR(EAGAIN);
+
+    if (!s->frame->buf[0]) {
+        err = ff_encode_get_frame(avctx, s->frame);
+        if (err < 0 && err != AVERROR_EOF && err != AVERROR(EAGAIN))
+            return err;
+    }
+
+    if (s->frame->buf[0]) {
+        err = eae_encode_send_frame(avctx, s->frame);
+        if (err != AVERROR(EAGAIN))
+            av_frame_unref(s->frame);
+    } else if (err == AVERROR_EOF) {
+        err = eae_encode_send_frame(avctx, s->frame);
+    }
+    if (err < 0 && err != AVERROR(EAGAIN) && err != AVERROR_EOF)
+        return err;
+
+    err = eae_read_output(avctx);
     if (err < 0)
         return err;
 
@@ -1365,6 +1417,8 @@ static int eae_close(AVCodecContext *avctx)
     av_freep(&s->io_out_file);
     av_buffer_unref(&s->io_data);
 
+    av_frame_free(&s->frame);
+
     av_freep(&s->path_in);
     av_freep(&s->path_out);
     av_freep(&s->path_in_tmp);
@@ -1398,7 +1452,6 @@ AVCodec ff_ac3_eae_decoder = {
     .priv_data_size = sizeof(EAEContext),
     .init           = eae_decode_init,
     .close          = eae_close,
-    .send_packet    = eae_decode_send_packet,
     .receive_frame  = eae_decode_receive_frame,
     .flush          = eae_flush,
     .capabilities   = AV_CODEC_CAP_DELAY,
@@ -1423,7 +1476,6 @@ AVCodec ff_eac3_eae_decoder = {
     .priv_data_size = sizeof(EAEContext),
     .init           = eae_decode_init,
     .close          = eae_close,
-    .send_packet    = eae_decode_send_packet,
     .receive_frame  = eae_decode_receive_frame,
     .flush          = eae_flush,
     .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
@@ -1448,7 +1500,6 @@ AVCodec ff_truehd_eae_decoder = {
     .priv_data_size = sizeof(EAEContext),
     .init           = eae_decode_init,
     .close          = eae_close,
-    .send_packet    = eae_decode_send_packet,
     .receive_frame  = eae_decode_receive_frame,
     .flush          = eae_flush,
     .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
@@ -1473,7 +1524,6 @@ AVCodec ff_mlp_eae_decoder = {
     .priv_data_size = sizeof(EAEContext),
     .init           = eae_decode_init,
     .close          = eae_close,
-    .send_packet    = eae_decode_send_packet,
     .receive_frame  = eae_decode_receive_frame,
     .flush          = eae_flush,
     .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
@@ -1498,7 +1548,6 @@ AVCodec ff_ac3_eae_encoder = {
     .priv_data_size = sizeof(EAEContext),
     .init           = eae_encode_init,
     .close          = eae_close,
-    .send_frame     = eae_encode_send_frame,
     .receive_packet = eae_encode_receive_packet,
     .flush          = eae_flush,
     .capabilities   = AV_CODEC_CAP_DELAY,
@@ -1529,7 +1578,6 @@ AVCodec ff_eac3_eae_encoder = {
     .priv_data_size = sizeof(EAEContext),
     .init           = eae_encode_init,
     .close          = eae_close,
-    .send_frame     = eae_encode_send_frame,
     .receive_packet = eae_encode_receive_packet,
     .flush          = eae_flush,
     .capabilities   = AV_CODEC_CAP_DELAY,

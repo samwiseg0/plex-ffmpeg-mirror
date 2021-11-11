@@ -18,6 +18,12 @@
 #define COBJMACROS
 #define _WIN32_WINNT 0x0601
 
+#include "avcodec.h"
+#include "decode.h"
+#include "libavutil/avassert.h"
+#include "libavutil/imgutils.h"
+#include "libavutil/opt.h"
+#include "internal.h"
 #include "mf_utils.h"
 
 // Include after mf_utils.h due to Windows include mess.
@@ -569,131 +575,6 @@ static int mf_sample_to_avframe(AVCodecContext *avctx, IMFSample *sample, AVFram
     return ret;
 }
 
-static int mf_sample_to_avpacket(AVCodecContext *avctx, IMFSample *sample, AVPacket *avpkt)
-{
-    MFContext *c = avctx->priv_data;
-    HRESULT hr;
-    int ret;
-    DWORD len;
-    IMFMediaBuffer *buffer;
-    BYTE *data;
-    UINT64 t;
-    UINT32 t32;
-
-    hr = IMFSample_GetTotalLength(sample, &len);
-    if (FAILED(hr))
-        return AVERROR_EXTERNAL;
-
-    if ((ret = av_new_packet(avpkt, len)) < 0)
-        return ret;
-
-    IMFSample_ConvertToContiguousBuffer(sample, &buffer);
-    if (FAILED(hr))
-        return AVERROR_EXTERNAL;
-
-    hr = IMFMediaBuffer_Lock(buffer, &data, NULL, NULL);
-    if (FAILED(hr)) {
-        IMFMediaBuffer_Release(buffer);
-        return AVERROR_EXTERNAL;
-    }
-
-    memcpy(avpkt->data, data, len);
-
-    IMFMediaBuffer_Unlock(buffer);
-    IMFMediaBuffer_Release(buffer);
-
-    avpkt->pts = avpkt->dts = mf_sample_get_pts(avctx, sample);
-
-    hr = IMFAttributes_GetUINT32(sample, &MFSampleExtension_CleanPoint, &t32);
-    if (c->is_audio || (!FAILED(hr) && t32 != 0))
-        avpkt->flags |= AV_PKT_FLAG_KEY;
-
-    hr = IMFAttributes_GetUINT64(sample, &MFSampleExtension_DecodeTimestamp, &t);
-    if (!FAILED(hr))
-        avpkt->dts = mf_from_mf_time(avctx, t);
-
-    return 0;
-}
-
-static IMFSample *mf_a_avframe_to_sample(AVCodecContext *avctx, const AVFrame *frame)
-{
-    MFContext *c = avctx->priv_data;
-    size_t len;
-    size_t bps;
-    IMFSample *sample;
-
-    bps = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->channels;
-    len = frame->nb_samples * bps;
-
-    sample = ff_create_memory_sample(frame->data[0], len, c->in_info.cbAlignment);
-    if (sample)
-        IMFSample_SetSampleDuration(sample, mf_to_mf_time(avctx, frame->nb_samples));
-    return sample;
-}
-
-static IMFSample *mf_v_avframe_to_sample(AVCodecContext *avctx, const AVFrame *frame)
-{
-    MFContext *c = avctx->priv_data;
-    IMFSample *sample;
-    IMFMediaBuffer *buffer;
-    BYTE *data;
-    HRESULT hr;
-    int ret;
-    int size;
-
-    size = av_image_get_buffer_size(avctx->pix_fmt, avctx->width, avctx->height, 1);
-    if (size < 0)
-        return NULL;
-
-    sample = ff_create_memory_sample(NULL, size, c->in_info.cbAlignment);
-    if (!sample)
-        return NULL;
-
-    hr = IMFSample_GetBufferByIndex(sample, 0, &buffer);
-    if (FAILED(hr)) {
-        IMFSample_Release(sample);
-        return NULL;
-    }
-
-    hr = IMFMediaBuffer_Lock(buffer, &data, NULL, NULL);
-    if (FAILED(hr)) {
-        IMFMediaBuffer_Release(buffer);
-        IMFSample_Release(sample);
-        return NULL;
-    }
-
-    ret = av_image_copy_to_buffer((uint8_t *)data, size, (void *)frame->data, frame->linesize,
-                                  avctx->pix_fmt, avctx->width, avctx->height, 1);
-    IMFMediaBuffer_SetCurrentLength(buffer, size);
-    IMFMediaBuffer_Unlock(buffer);
-    IMFMediaBuffer_Release(buffer);
-    if (ret < 0) {
-        IMFSample_Release(sample);
-        return NULL;
-    }
-
-    IMFSample_SetSampleDuration(sample, mf_to_mf_time(avctx, frame->pkt_duration));
-
-    return sample;
-}
-
-static IMFSample *mf_avframe_to_sample(AVCodecContext *avctx, const AVFrame *frame)
-{
-    MFContext *c = avctx->priv_data;
-    IMFSample *sample;
-
-    if (c->is_audio) {
-        sample = mf_a_avframe_to_sample(avctx, frame);
-    } else {
-        sample = mf_v_avframe_to_sample(avctx, frame);
-    }
-
-    if (sample)
-        mf_sample_set_pts(avctx, sample, frame->pts);
-
-    return sample;
-}
-
 static int mf_send_sample(AVCodecContext *avctx, IMFSample *sample)
 {
     MFContext *c = avctx->priv_data;
@@ -730,26 +611,6 @@ static int mf_send_sample(AVCodecContext *avctx, IMFSample *sample)
         return AVERROR_EOF;
     }
     return 0;
-}
-
-static int mf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
-{
-    MFContext *c = avctx->priv_data;
-    int ret;
-    IMFSample *sample = NULL;
-    if (frame) {
-        sample = mf_avframe_to_sample(avctx, frame);
-        if (!sample)
-            return AVERROR(ENOMEM);
-        if (c->is_enc && c->is_video && c->codec_api) {
-            if (frame->pict_type == AV_PICTURE_TYPE_I || !c->sample_sent)
-                ICodecAPI_SetValue(c->codec_api, &ff_CODECAPI_AVEncVideoForceKeyFrame, FF_VAL_VT_UI4(1));
-        }
-    }
-    ret = mf_send_sample(avctx, sample);
-    if (sample)
-        IMFSample_Release(sample);
-    return ret;
 }
 
 static int mf_send_packet(AVCodecContext *avctx, const AVPacket *avpkt)
@@ -851,6 +712,17 @@ static int mf_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 {
     IMFSample *sample;
     int ret;
+    AVPacket pkt = {0};
+
+    ret = ff_decode_get_packet(avctx, &pkt);
+    if (ret < 0 && ret != AVERROR_EOF && ret != AVERROR(EAGAIN))
+        return ret;
+    if (ret != AVERROR(EAGAIN)) {
+        ret = mf_send_packet(avctx, pkt.size ? &pkt : NULL);
+        av_packet_unref(&pkt);
+        if (ret < 0)
+            return ret;
+    }
 
     ret = mf_receive_sample(avctx, &sample);
     if (ret < 0)
@@ -858,34 +730,6 @@ static int mf_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 
     ret = mf_sample_to_avframe(avctx, sample, frame);
     IMFSample_Release(sample);
-    return ret;
-}
-
-static int mf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
-{
-    MFContext *c = avctx->priv_data;
-    IMFSample *sample;
-    int ret;
-
-    ret = mf_receive_sample(avctx, &sample);
-    if (ret < 0)
-        return ret;
-
-    ret = mf_sample_to_avpacket(avctx, sample, avpkt);
-    IMFSample_Release(sample);
-
-    if (c->send_extradata) {
-        ret = av_packet_add_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA,
-                                      c->send_extradata,
-                                      c->send_extradata_size);
-        if (ret < 0) {
-            av_log(avctx, AV_LOG_ERROR, "Failed to add extradata: %i\n", ret);
-            return ret;
-        }
-        c->send_extradata = NULL;
-        c->send_extradata_size = 0;
-    }
-
     return ret;
 }
 
@@ -2004,18 +1848,6 @@ static int mf_close(AVCodecContext *avctx)
     return 0;
 }
 
-static int mf_probe(struct AVCodec *codec)
-{
-    IMFTransform *mft;
-    int ret;
-
-    if ((ret = mf_create(NULL, &mft, codec, 0)) < 0)
-        return ret;
-
-    ff_free_mf(&mft);
-    return 0;
-}
-
 #define OFFSET(x) offsetof(MFContext, x)
 
 #define MF_DECODER(MEDIATYPE, NAME, ID, OPTS) \
@@ -2032,10 +1864,8 @@ static int mf_probe(struct AVCodec *codec)
         .type           = AVMEDIA_TYPE_ ## MEDIATYPE,                          \
         .id             = AV_CODEC_ID_ ## ID,                                  \
         .priv_data_size = sizeof(MFContext),                                   \
-        .probe          = mf_probe,                                            \
         .init           = mf_init,                                             \
         .close          = mf_close,                                            \
-        .send_packet    = mf_send_packet,                                      \
         .receive_frame  = mf_receive_frame,                                    \
         .flush          = mf_flush,                                            \
         .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,     \
@@ -2099,61 +1929,3 @@ MF_VIDEO_DECODER(msmpeg4v1,    MSMPEG4V1);
 MF_VIDEO_DECODER(msmpeg4v2,    MSMPEG4V2);
 MF_VIDEO_DECODER(msmpeg4v3,    MSMPEG4V3);
 MF_VIDEO_DECODER(mjpeg,        MJPEG);
-
-#define MF_ENCODER(MEDIATYPE, NAME, ID, OPTS, EXTRA) \
-    static const AVClass ff_ ## NAME ## _mf_encoder_class = {                  \
-        .class_name = #NAME "_mf",                                             \
-        .item_name  = av_default_item_name,                                    \
-        .option     = OPTS,                                                    \
-        .version    = LIBAVUTIL_VERSION_INT,                                   \
-    };                                                                         \
-    AVCodec ff_ ## NAME ## _mf_encoder = {                                     \
-        .priv_class     = &ff_ ## NAME ## _mf_encoder_class,                   \
-        .name           = #NAME "_mf",                                         \
-        .long_name      = NULL_IF_CONFIG_SMALL(#ID " via MediaFoundation"),    \
-        .type           = AVMEDIA_TYPE_ ## MEDIATYPE,                          \
-        .id             = AV_CODEC_ID_ ## ID,                                  \
-        .priv_data_size = sizeof(MFContext),                                   \
-        .probe          = mf_probe,                                            \
-        .init           = mf_init,                                             \
-        .close          = mf_close,                                            \
-        .send_frame     = mf_send_frame,                                       \
-        .receive_packet = mf_receive_packet,                                   \
-        EXTRA                                                                  \
-        .capabilities   = AV_CODEC_CAP_DELAY,                                  \
-        .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE |                       \
-                          FF_CODEC_CAP_INIT_CLEANUP,                           \
-    };
-
-#define AFMTS \
-        .sample_fmts    = (const enum AVSampleFormat[]){ AV_SAMPLE_FMT_S16,    \
-                                                         AV_SAMPLE_FMT_NONE },
-
-MF_ENCODER(AUDIO, aac,         AAC, NULL, AFMTS);
-MF_ENCODER(AUDIO, ac3,         AC3, NULL, AFMTS);
-MF_ENCODER(AUDIO, mp3,         MP3, NULL, AFMTS);
-
-#define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
-static const AVOption venc_opts[] = {
-    {"rate_control",  "Select rate control mode", OFFSET(opt_enc_rc), AV_OPT_TYPE_INT, {.i64 = -1}, -1, INT_MAX, VE, "rate_control"},
-    { "default",      "Default mode", 0, AV_OPT_TYPE_CONST, {.i64 = -1}, 0, 0, VE, "rate_control"},
-    { "cbr",          "CBR mode", 0, AV_OPT_TYPE_CONST, {.i64 = ff_eAVEncCommonRateControlMode_CBR}, 0, 0, VE, "rate_control"},
-    { "pc_vbr",       "Peak constrained VBR mode", 0, AV_OPT_TYPE_CONST, {.i64 = ff_eAVEncCommonRateControlMode_PeakConstrainedVBR}, 0, 0, VE, "rate_control"},
-    { "u_vbr",        "Unconstrained VBR mode", 0, AV_OPT_TYPE_CONST, {.i64 = ff_eAVEncCommonRateControlMode_UnconstrainedVBR}, 0, 0, VE, "rate_control"},
-    { "quality",      "Quality mode", 0, AV_OPT_TYPE_CONST, {.i64 = ff_eAVEncCommonRateControlMode_Quality}, 0, 0, VE, "rate_control" },
-    // The following rate_control modes require Windows 8.
-    { "ld_vbr",       "Low delay VBR mode", 0, AV_OPT_TYPE_CONST, {.i64 = ff_eAVEncCommonRateControlMode_LowDelayVBR}, 0, 0, VE, "rate_control"},
-    { "g_vbr",        "Global VBR mode", 0, AV_OPT_TYPE_CONST, {.i64 = ff_eAVEncCommonRateControlMode_GlobalVBR}, 0, 0, VE, "rate_control" },
-    { "gld_vbr",      "Global low delay VBR mode", 0, AV_OPT_TYPE_CONST, {.i64 = ff_eAVEncCommonRateControlMode_GlobalLowDelayVBR}, 0, 0, VE, "rate_control"},
-    {"quality",       "Quality", OFFSET(opt_enc_quality), AV_OPT_TYPE_INT, {.i64 = -1}, -1, 100, VE},
-    {"hw_encoding",   "Force hardware encoding", OFFSET(opt_enc_d3d), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, VE, "hw_encoding"},
-    {NULL}
-};
-
-#define VFMTS \
-        .pix_fmts       = (const enum AVPixelFormat[]){ AV_PIX_FMT_NV12,       \
-                                                        AV_PIX_FMT_YUV420P,    \
-                                                        AV_PIX_FMT_NONE },
-
-MF_ENCODER(VIDEO, h264,        H264, venc_opts, VFMTS);
-MF_ENCODER(VIDEO, hevc,        HEVC, venc_opts, VFMTS);

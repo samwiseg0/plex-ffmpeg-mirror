@@ -578,7 +578,7 @@ static inline int h263_mv4_search(MpegEncContext *s, int mx, int my, int shift)
     int dmin_sum=0, mx4_sum=0, my4_sum=0, i;
     int same=1;
     const int stride= c->stride;
-    uint8_t *mv_penalty= c->current_mv_penalty;
+    const uint8_t *mv_penalty = c->current_mv_penalty;
     int safety_clipping= s->unrestricted_mv && (s->width&15) && (s->height&15);
 
     init_mv4_ref(c);
@@ -743,7 +743,7 @@ static int interlaced_search(MpegEncContext *s, int ref_index,
     const int h=8;
     int block;
     int P[10][2];
-    uint8_t * const mv_penalty= c->current_mv_penalty;
+    const uint8_t * const mv_penalty = c->current_mv_penalty;
     int same=1;
     const int stride= 2*s->linesize;
     int dmin_sum= 0;
@@ -971,7 +971,7 @@ void ff_estimate_p_frame_motion(MpegEncContext * s,
         int i_score= varc-500+(s->lambda2>>FF_LAMBDA_SHIFT)*20;
         c->scene_change_score+= ff_sqrt(p_score) - ff_sqrt(i_score);
 
-        if (vard*2 + 200*256 > varc)
+        if (vard*2 + 200*256 > varc && !s->intra_penalty)
             mb_type|= CANDIDATE_MB_TYPE_INTRA;
         if (varc*2 + 200*256 > vard || s->qscale > 24){
 //        if (varc*2 + 200*256 + 50*(s->lambda2>>FF_LAMBDA_SHIFT) > vard){
@@ -1040,7 +1040,7 @@ void ff_estimate_p_frame_motion(MpegEncContext * s,
 
             intra_score= s->mecc.mb_cmp[0](s, c->scratchpad, pix, s->linesize, 16);
         }
-        intra_score += c->mb_penalty_factor*16;
+        intra_score += c->mb_penalty_factor*16 + s->intra_penalty;
 
         if(intra_score < dmin){
             mb_type= CANDIDATE_MB_TYPE_INTRA;
@@ -1120,7 +1120,7 @@ static int estimate_motion_b(MpegEncContext *s, int mb_x, int mb_y,
     const int shift= 1+s->quarter_sample;
     const int mot_stride = s->mb_stride;
     const int mot_xy = mb_y*mot_stride + mb_x;
-    uint8_t * const mv_penalty= c->mv_penalty[f_code] + MAX_DMV;
+    const uint8_t * const mv_penalty = c->mv_penalty[f_code] + MAX_DMV;
     int mv_scale;
 
     c->penalty_factor    = get_penalty_factor(s->lambda, s->lambda2, c->avctx->me_cmp);
@@ -1184,8 +1184,8 @@ static inline int check_bidir_mv(MpegEncContext * s,
     //FIXME better f_code prediction (max mv & distance)
     //FIXME pointers
     MotionEstContext * const c= &s->me;
-    uint8_t * const mv_penalty_f= c->mv_penalty[s->f_code] + MAX_DMV; // f_code of the prev frame
-    uint8_t * const mv_penalty_b= c->mv_penalty[s->b_code] + MAX_DMV; // f_code of the prev frame
+    const uint8_t * const mv_penalty_f = c->mv_penalty[s->f_code] + MAX_DMV; // f_code of the prev frame
+    const uint8_t * const mv_penalty_b = c->mv_penalty[s->b_code] + MAX_DMV; // f_code of the prev frame
     int stride= c->stride;
     uint8_t *dest_y = c->scratchpad;
     uint8_t *ptr;
@@ -1600,7 +1600,7 @@ int ff_get_best_fcode(MpegEncContext * s, int16_t (*mv_table)[2], int type)
     if (s->motion_est != FF_ME_ZERO) {
         int score[8];
         int i, y, range= s->avctx->me_range ? s->avctx->me_range : (INT_MAX/2);
-        uint8_t * fcode_tab= s->fcode_tab;
+        const uint8_t * fcode_tab = s->fcode_tab;
         int best_fcode=-1;
         int best_score=-10000000;
 
@@ -1648,7 +1648,7 @@ int ff_get_best_fcode(MpegEncContext * s, int16_t (*mv_table)[2], int type)
     }
 }
 
-void ff_fix_long_p_mvs(MpegEncContext * s)
+void ff_fix_long_p_mvs(MpegEncContext * s, int type)
 {
     MotionEstContext * const c= &s->me;
     const int f_code= s->f_code;
@@ -1682,8 +1682,8 @@ void ff_fix_long_p_mvs(MpegEncContext * s)
                         if(   mx >=range || mx <-range
                            || my >=range || my <-range){
                             s->mb_type[i] &= ~CANDIDATE_MB_TYPE_INTER4V;
-                            s->mb_type[i] |= CANDIDATE_MB_TYPE_INTRA;
-                            s->current_picture.mb_type[i] = CANDIDATE_MB_TYPE_INTRA;
+                            s->mb_type[i] |= type;
+                            s->current_picture.mb_type[i] = type;
                         }
                     }
                 }

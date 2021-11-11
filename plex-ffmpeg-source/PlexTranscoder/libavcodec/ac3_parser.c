@@ -202,6 +202,12 @@ static int ac3_sync(uint64_t state, AACAC3ParseContext *hdr_info,
     AC3HeaderInfo hdr;
     GetBitContext gbc;
 
+    if (tmp.u8[1] == 0x77 && tmp.u8[2] == 0x0b) {
+        FFSWAP(uint8_t, tmp.u8[1], tmp.u8[2]);
+        FFSWAP(uint8_t, tmp.u8[3], tmp.u8[4]);
+        FFSWAP(uint8_t, tmp.u8[5], tmp.u8[6]);
+    }
+
     init_get_bits(&gbc, tmp.u8+8-AC3_HEADER_SIZE, 54);
     err = ff_ac3_parse_header(&gbc, &hdr);
 
@@ -233,6 +239,10 @@ static int ac3_parse_full(AVCodecParserContext *s1, AVCodecContext *avctx,
     AC3HeaderInfo hdr = {0};
     int ret = 0;
     uint64_t layout = 0;
+
+    if (buf_size == 0)
+        return AVERROR(EINVAL);
+
     while (hdr.frame_size < buf_size) {
         GetBitContext gbc;
 

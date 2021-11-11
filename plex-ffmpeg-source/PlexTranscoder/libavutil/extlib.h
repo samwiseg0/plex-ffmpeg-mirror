@@ -1,5 +1,5 @@
 /*
- * copyright (c) 2016 Rodger Combs <rodger.combs@gmail.com>
+ * copyright (c) 2016 rcombs <rcombs@rcombs.me>
  *
  * This file is part of FFmpeg.
  *

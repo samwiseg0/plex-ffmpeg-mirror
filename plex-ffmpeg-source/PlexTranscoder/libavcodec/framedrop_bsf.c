@@ -23,6 +23,7 @@
 
 #include "avcodec.h"
 #include "bsf.h"
+#include "bsf_internal.h"
 
 #include "libavutil/opt.h"
 
@@ -49,10 +50,10 @@ static int framedrop_filter(AVBSFContext *ctx, AVPacket *out)
     } else {
         av_packet_move_ref(out, in);
     }
-    
+
 done:
     av_packet_free(&in);
-    
+
     return ret;
 }
 

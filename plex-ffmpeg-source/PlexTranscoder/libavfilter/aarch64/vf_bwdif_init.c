@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 Rodger Combs <rodger.combs@gmail.com>
+ * Copyright (C) 2019 rcombs <rcombs@rcombs.me>
  *
  * This file is part of FFmpeg.
  *

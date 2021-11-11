@@ -276,7 +276,7 @@ typedef struct MpegEncContext {
     int mv[2][4][2];
     int field_select[2][2];
     int last_mv[2][2][2];             ///< last MV, used for MV prediction in MPEG-1 & B-frame MPEG-4
-    uint8_t *fcode_tab;               ///< smallest fcode needed for each MV
+    const uint8_t *fcode_tab;         ///< smallest fcode needed for each MV
     int16_t direct_scale_mv[2][64];   ///< precomputed to avoid divisions in ff_mpeg4_set_direct_mv
 
     MotionEstContext me;
@@ -444,6 +444,9 @@ typedef struct MpegEncContext {
     int inter_intra_pred;
     int mspel;
 
+    /* SpeedHQ specific */
+    int slice_start;
+
     /* decompression specific */
     GetBitContext gb;
 
@@ -580,6 +583,8 @@ typedef struct MpegEncContext {
 
     int scenechange_threshold;
     int noise_reduction;
+
+    int intra_penalty;
 } MpegEncContext;
 
 /* mpegvideo_enc common options */
@@ -664,6 +669,7 @@ FF_MPV_OPT_CMP_FUNC, \
 {"ps", "RTP payload size in bytes",                             FF_MPV_OFFSET(rtp_payload_size), AV_OPT_TYPE_INT, {.i64 = 0 }, INT_MIN, INT_MAX, FF_MPV_OPT_FLAGS }, \
 {"mepc", "Motion estimation bitrate penalty compensation (1.0 = 256)", FF_MPV_OFFSET(me_penalty_compensation), AV_OPT_TYPE_INT, {.i64 = 256 }, INT_MIN, INT_MAX, FF_MPV_OPT_FLAGS }, \
 {"mepre", "pre motion estimation", FF_MPV_OFFSET(me_pre), AV_OPT_TYPE_INT, {.i64 = 0 }, INT_MIN, INT_MAX, FF_MPV_OPT_FLAGS }, \
+{"intra_penalty", "Penalty for intra blocks in block decision", FF_MPV_OFFSET(intra_penalty), AV_OPT_TYPE_INT, {.i64 = 0 }, 0, INT_MAX/2, FF_MPV_OPT_FLAGS }, \
 {"a53cc", "Use A53 Closed Captions (if available)", FF_MPV_OFFSET(a53_cc), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FF_MPV_OPT_FLAGS }, \
 
 extern const AVOption ff_mpv_generic_options[];
@@ -688,7 +694,6 @@ void ff_mpv_common_init_mips(MpegEncContext *s);
 int ff_mpv_common_frame_size_change(MpegEncContext *s);
 void ff_mpv_common_end(MpegEncContext *s);
 
-void ff_mpv_decode_defaults(MpegEncContext *s);
 void ff_mpv_decode_init(MpegEncContext *s, AVCodecContext *avctx);
 void ff_mpv_reconstruct_mb(MpegEncContext *s, int16_t block[12][64]);
 void ff_mpv_report_decode_progress(MpegEncContext *s);

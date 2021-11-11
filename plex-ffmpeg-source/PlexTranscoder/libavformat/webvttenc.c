@@ -78,7 +78,6 @@ static int webvtt_write_header(AVFormatContext *ctx)
     // from the rest of the body.
     avio_printf(pb, "\n");
     //PLEX
-    avio_flush(pb);
 
     return 0;
 }

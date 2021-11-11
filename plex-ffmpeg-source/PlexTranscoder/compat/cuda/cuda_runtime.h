@@ -1,7 +1,7 @@
 /*
  * Minimum CUDA compatibility definitions header
  *
- * Copyright (c) 2019 Rodger Combs
+ * Copyright (c) 2019 rcombs
  *
  * This file is part of FFmpeg.
  *
@@ -20,8 +20,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AV_COMPAT_CUDA_CUDA_RUNTIME_H
-#define AV_COMPAT_CUDA_CUDA_RUNTIME_H
+#ifndef COMPAT_CUDA_CUDA_RUNTIME_H
+#define COMPAT_CUDA_CUDA_RUNTIME_H
 
 // Common macros
 #define __global__ __attribute__((global))
@@ -118,10 +118,13 @@ GET(getThreadIdx, tid)
 
 TEX2D(unsigned char, a & 0xFF)
 TEX2D(unsigned short, a & 0xFFFF)
+TEX2D(float, a)
 TEX2D(uchar2, make_uchar2((unsigned char)a, (unsigned char)b))
 TEX2D(ushort2, make_ushort2((unsigned short)a, (unsigned short)b))
+TEX2D(float2, make_float2(a, b))
 TEX2D(uchar4, make_uchar4((unsigned char)a, (unsigned char)b, (unsigned char)c, (unsigned char)d))
 TEX2D(ushort4, make_ushort4((unsigned short)a, (unsigned short)b, (unsigned short)c, (unsigned short)d))
+TEX2D(float4, make_float4(a, b, c, d))
 
 // Template calling tex instruction and converting the output to the selected type
 template <class T>
@@ -135,6 +138,30 @@ static __inline__ __device__ T tex2D(cudaTextureObject_t texObject, float x, flo
     conv(&ret, ret1, ret2, ret3, ret4);
     return ret;
 }
+
+template<>
+inline __device__ float4 tex2D<float4>(cudaTextureObject_t texObject, float x, float y)
+{
+    float4 ret;
+    asm("tex.2d.v4.f32.f32 {%0, %1, %2, %3}, [%4, {%5, %6}];" :
+        "=r"(ret.x), "=r"(ret.y), "=r"(ret.z), "=r"(ret.w) :
+        "l"(texObject), "f"(x), "f"(y));
+    return ret;
+}
+
+template<>
+inline __device__ float tex2D<float>(cudaTextureObject_t texObject, float x, float y)
+{
+    return tex2D<float4>(texObject, x, y).x;
+}
+
+template<>
+inline __device__ float2 tex2D<float2>(cudaTextureObject_t texObject, float x, float y)
+{
+    float4 ret = tex2D<float4>(texObject, x, y);
+    return make_float2(ret.x, ret.y);
+}
+
 
 static __inline__ __device__ float __exp2f(float x)
 {
@@ -167,4 +194,21 @@ static __inline__ __device__ float __sqrtf(float x)
     return ret;
 }
 
-#endif
+// Math helper functions
+static inline __device__ float floorf(float a) { return __builtin_floorf(a); }
+static inline __device__ float floor(float a) { return __builtin_floorf(a); }
+static inline __device__ double floor(double a) { return __builtin_floor(a); }
+static inline __device__ float ceilf(float a) { return __builtin_ceilf(a); }
+static inline __device__ float ceil(float a) { return __builtin_ceilf(a); }
+static inline __device__ double ceil(double a) { return __builtin_ceil(a); }
+static inline __device__ float truncf(float a) { return __builtin_truncf(a); }
+static inline __device__ float trunc(float a) { return __builtin_truncf(a); }
+static inline __device__ double trunc(double a) { return __builtin_trunc(a); }
+static inline __device__ float fabsf(float a) { return __builtin_fabsf(a); }
+static inline __device__ float fabs(float a) { return __builtin_fabsf(a); }
+static inline __device__ double fabs(double a) { return __builtin_fabs(a); }
+
+static inline __device__ float __sinf(float a) { return __nvvm_sin_approx_f(a); }
+static inline __device__ float __cosf(float a) { return __nvvm_cos_approx_f(a); }
+
+#endif /* COMPAT_CUDA_CUDA_RUNTIME_H */

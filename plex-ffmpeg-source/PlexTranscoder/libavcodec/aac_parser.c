@@ -870,8 +870,7 @@ static int aac_parse_full(AVCodecParserContext *s1, AVCodecContext *avctx,
             s->samples >>= 1;
     } else {
         s->samples = 1024;
-        if (ff_thread_once(&ff_aac_table_init_common, &ff_aac_static_table_init_common))
-            return AVERROR_UNKNOWN;
+        ff_aac_static_table_init_common();
         parse_frame(s1, &m4ac, &gb);
     }
 

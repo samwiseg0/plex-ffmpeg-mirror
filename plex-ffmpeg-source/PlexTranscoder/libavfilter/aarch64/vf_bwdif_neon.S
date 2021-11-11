@@ -2,7 +2,7 @@
  * Copyright (C) 2006 Michael Niedermayer <michaelni@gmx.at>
  * Copyright (c) 2013 Daniel Kang <daniel.d.kang@gmail.com>
  * Copyright (C) 2016 Thomas Mundt <loudmax@yahoo.de>
- * Copyright (c) 2019 Rodger Combs <rodger.combs@gmail.com>
+ * Copyright (c) 2019 rcombs <rcombs@rcombs.me>
  *
  * This file is part of FFmpeg.
  *

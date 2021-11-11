@@ -118,8 +118,12 @@ skip_sync:
             avctx->sample_fmt = AV_SAMPLE_FMT_S16P;
         }
 
-        if (avctx->codec_id != AV_CODEC_ID_EAC3)
-            avctx->bit_rate = s->bit_rate;
+        /* Calculate the average bit rate */
+        s->frame_number++;
+        if (avctx->codec_id != AV_CODEC_ID_EAC3 && !(s1->flags & PARSER_FLAG_SKIP)) {
+            avctx->bit_rate +=
+                (s->bit_rate - avctx->bit_rate) / s->frame_number;
+        }
     }
 
     return i;

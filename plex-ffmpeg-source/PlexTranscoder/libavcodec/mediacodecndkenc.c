@@ -29,14 +29,14 @@
 #include "libavutil/opt.h"
 #include "libavutil/avassert.h"
 #include "avcodec.h"
+#include "encode.h"
 #include "internal.h"
 #include "mediacodecndk.h"
 
-typedef struct MediaCodecNDKEncoderContext
-{
+typedef struct MediaCodecNDKEncoderContext {
     AVClass *avclass;
     AMediaCodec *encoder;
-    AVFrame  frame;
+    AVFrame *frame;
     int saw_output_eos;
     int64_t last_dts;
     int rc_mode;
@@ -82,13 +82,17 @@ static av_cold int mediacodecndk_encode_init(AVCodecContext *avctx)
     if (ret < 0)
         return ret;
 
+    ctx->frame = av_frame_alloc();
+    if (!ctx->frame)
+        return ret;
+
     if (ctx->is_rtk < 0)
         ctx->is_rtk = !!getenv("PLEX_MEDIA_SERVER_IS_KAMINO");
 
     pixelFormat = ff_mediacodecndk_get_color_format(avctx->pix_fmt);
 
     if (!(format = AMediaFormat_new()))
-        return AVERROR(ENOMEM);
+        goto fail;
 
     AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_HEIGHT, avctx->height);
@@ -177,6 +181,8 @@ fail:
         AMediaFormat_delete(format);
     if (ctx->encoder)
         AMediaCodec_delete(ctx->encoder);
+    if (ctx->frame)
+        av_frame_free(&ctx->frame);
     return ret;
 }
 
@@ -263,8 +269,22 @@ fail:
 
 static int mediacodecndk_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
 {
+    int ret;
     int64_t timeout = avctx->internal->draining ? 1000000 : 0;
     MediaCodecNDKEncoderContext *ctx = avctx->priv_data;
+
+    if (!ctx->frame->buf[0]) {
+        ret = ff_encode_get_frame(avctx, ctx->frame);
+        if (ret < 0 && ret != AVERROR_EOF)
+            return ret;
+    }
+
+    ret = mediacodecndk_send_frame(avctx, ctx->frame->buf[0] ? ctx->frame : NULL);
+    if (ret != AVERROR(EAGAIN))
+        av_frame_unref(ctx->frame);
+    if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF)
+        return ret;
+
     while (!ctx->saw_output_eos) {
         AMediaCodecBufferInfo bufferInfo;
         int encoderStatus = AMediaCodec_dequeueOutputBuffer(ctx->encoder, &bufferInfo, timeout);
@@ -297,7 +317,6 @@ static int mediacodecndk_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
         } else if (encoderStatus < 0) {
             av_log(avctx, AV_LOG_WARNING, "Unknown MediaCodec status: %i\n", encoderStatus);
         } else {
-            int ret;
             size_t outSize;
             uint8_t *outBuffer = AMediaCodec_getOutputBuffer(ctx->encoder, encoderStatus, &outSize);
             if (bufferInfo.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) {
@@ -364,6 +383,8 @@ static av_cold int mediacodecndk_encode_close(AVCodecContext *avctx)
         AMediaCodec_delete(ctx->encoder);
     }
 
+    av_frame_free(&ctx->frame);
+
     return 0;
 }
 
@@ -381,7 +402,6 @@ AVCodec ff_h264_mediacodecndk_encoder = {
     .id = AV_CODEC_ID_H264,
     .priv_data_size = sizeof(MediaCodecNDKEncoderContext),
     .init = mediacodecndk_encode_init,
-    .send_frame     = mediacodecndk_send_frame,
     .receive_packet = mediacodecndk_receive_packet,
     .close = mediacodecndk_encode_close,
     .capabilities = AV_CODEC_CAP_DELAY,

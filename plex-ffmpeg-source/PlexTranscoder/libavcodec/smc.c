@@ -445,7 +445,7 @@ static int smc_decode_frame(AVCodecContext *avctx,
 
     bytestream2_init(&s->gb, buf, buf_size);
 
-    if ((ret = ff_reget_buffer(avctx, s->frame)) < 0)
+    if ((ret = ff_reget_buffer(avctx, s->frame, 0)) < 0)
         return ret;
 
     if (pal && pal_size == AVPALETTE_SIZE) {
@@ -484,4 +484,5 @@ AVCodec ff_smc_decoder = {
     .close          = smc_decode_end,
     .decode         = smc_decode_frame,
     .capabilities   = AV_CODEC_CAP_DR1,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };
