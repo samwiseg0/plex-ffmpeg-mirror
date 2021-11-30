@@ -2288,7 +2288,7 @@ static int hls_read_header(AVFormatContext *s)
         for (i = 0; i < c->n_playlists; i++) {
             struct playlist *pls = c->playlists[i];
             pls->m3u8_hold_counters = 0;
-            if (!pls->n_main_streams) {
+            if (!pls->n_main_streams || i == 0) {
                 if ((ret = parse_playlist(c, pls->url, pls, NULL)) < 0) {
                     av_log(s, AV_LOG_WARNING, "parse_playlist error %s [%s]\n", av_err2str(ret), pls->url);
                     pls->broken = 1;

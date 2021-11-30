@@ -747,7 +747,7 @@ static void mf_flush(AVCodecContext *avctx)
     // In async mode, we have to wait until previous events have been flushed.
     if (c->async_events) {
         hr = IMFMediaEventGenerator_QueueEvent(c->async_events, ff_METransformMarker,
-                                               &GUID_NULL, S_OK, NULL);
+                                               &ff_GUID_NULL, S_OK, NULL);
         if (FAILED(hr)) {
             av_log(avctx, AV_LOG_ERROR, "sending marker failed\n");
         } else {

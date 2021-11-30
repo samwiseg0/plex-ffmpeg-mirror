@@ -551,6 +551,11 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
 
     ret = do_tonemap(ctx, out, in);
 
+    out->color_range     = s->out_range;
+    out->color_trc       = s->out_trc;
+    out->color_primaries = s->out_pri;
+    out->colorspace      = s->out_spc;
+
     CHECK_CU(cu->cuCtxPopCurrent(&dummy));
     if (ret < 0)
         goto fail;
