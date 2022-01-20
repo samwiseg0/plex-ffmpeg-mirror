@@ -163,7 +163,7 @@ static av_cold int omx_component_init(AVCodecContext *avctx, const char *role)
     in_port_params.format.video.nFrameWidth  = 0;
     in_port_params.format.video.nFrameHeight = 0;
 
-    //in_port_params.nBufferCountActual = in_port_params.nBufferCountActual + 10;
+    in_port_params.nBufferCountActual += s->extra_input_buffers;
 
     err = OMX_SetParameter(s->handle, OMX_IndexParamPortDefinition, &in_port_params);
     CHECK(err);
@@ -186,7 +186,7 @@ static av_cold int omx_component_init(AVCodecContext *avctx, const char *role)
     out_port_params.format.video.eColorFormat  = OMX_COLOR_FormatYUV420SemiPlanar;
     out_port_params.format.video.eCompressionFormat = OMX_VIDEO_CodingUnused;
 
-    out_port_params.nBufferCountActual = out_port_params.nBufferCountActual + 10;
+    out_port_params.nBufferCountActual += s->extra_output_buffers;
 
     err = OMX_SetParameter(s->handle, OMX_IndexParamPortDefinition, &out_port_params);
     CHECK(err);
@@ -569,6 +569,9 @@ loopfail:
         }
     } while (pkt.size);
 
+    if (eos)
+        s->eos_sent = 1;
+
 fail:
     av_packet_unref(&pkt);
     return ret;
@@ -648,6 +651,8 @@ static const AVOption options[] = {
     { "zerocopy", "Try to avoid copying input packets if possible", OFFSET(input_zerocopy), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VDE },
     { "hwdeint_mode", "Deinterlace video (-1 = auto)", OFFSET(deinterlace), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, VDE },
     { "output_size", "Scale output", OFFSET(scale_width), AV_OPT_TYPE_IMAGE_SIZE, { .i64 = 0 }, 0, INT_MAX, VDE },
+    { "extra_input_buffers",  "Number of additional input buffers to request",  OFFSET(extra_input_buffers),  AV_OPT_TYPE_INT, { .i64 = 0 },  0, 32, VDE },
+    { "extra_output_buffers", "Number of additional output buffers to request", OFFSET(extra_output_buffers), AV_OPT_TYPE_INT, { .i64 = 10 }, 0, 32, VDE },
     { NULL }
 };
 

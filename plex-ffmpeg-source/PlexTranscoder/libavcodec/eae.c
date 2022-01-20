@@ -1331,7 +1331,7 @@ static int eae_encode_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
         if (err != AVERROR(EAGAIN))
             av_frame_unref(s->frame);
     } else if (err == AVERROR_EOF) {
-        err = eae_encode_send_frame(avctx, s->frame);
+        err = eae_encode_send_frame(avctx, NULL);
     }
     if (err < 0 && err != AVERROR(EAGAIN) && err != AVERROR_EOF)
         return err;

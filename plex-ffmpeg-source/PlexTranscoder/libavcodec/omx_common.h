@@ -150,6 +150,8 @@ typedef struct OMXCodecContext {
 
     int deinterlace;
     int scale_width, scale_height;
+
+    int extra_output_buffers, extra_input_buffers;
 } OMXCodecContext;
 
 av_cold int ff_omx_codec_init(AVCodecContext *avctx);
