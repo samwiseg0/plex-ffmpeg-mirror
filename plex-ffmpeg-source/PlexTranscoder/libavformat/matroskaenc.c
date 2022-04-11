@@ -2787,6 +2787,20 @@ static int mkv_check_bitstream(struct AVFormatContext *s, const AVPacket *pkt)
             ret = ff_stream_add_bitstream_filter(st, "aac_adtstoasc", NULL);
     } else if (st->codecpar->codec_id == AV_CODEC_ID_VP9) {
         ret = ff_stream_add_bitstream_filter(st, "vp9_superframe", NULL);
+    } else if (st->codecpar->codec_id == AV_CODEC_ID_H264) {
+        if (!st->codecpar->extradata_size) {
+            int side_data_size;
+            uint8_t *side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA,
+                                                         &side_data_size);
+
+            if (!side_data)
+                return 0;
+
+            if (!(st->codecpar->extradata = av_memdup(side_data, side_data_size)))
+                return AVERROR(ENOMEM);
+
+            st->codecpar->extradata_size = side_data_size;
+        }
     }
 
     return ret;
