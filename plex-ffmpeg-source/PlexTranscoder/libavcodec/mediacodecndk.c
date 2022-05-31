@@ -128,36 +128,21 @@ static int ff_mediacodecndk_init_binder_imp(void)
 
 static void ff_mediacodecndk_init_binder_once(void)
 {
-  // If this env var is not set, assume we're running on SHIELD, with an older java wrapper which hasn't
-  // set up the env vars. To be removed when the kamino kepler-server changes are merged to master.
-  //
-  if (!getenv("MEDIACODECNDK_BINDER_LIB"))
-  {
-    void *lib = dlopen("ndkbinderutil.so", RTLD_NOW | RTLD_GLOBAL);
-    void (*thread_pool_start)(void);
-    if (!lib)
-        lib = dlopen("nvtranscode.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!lib) {
-        av_log(NULL, AV_LOG_ERROR, "Binder initialization library not found\n");
-        atomic_store_explicit(&ret, AVERROR_ENCODER_NOT_FOUND, memory_order_relaxed);
-        return;
+    // First, try the modern built-in function.
+    void *libbinder = dlopen("libbinder_ndk.so", RTLD_NOW | RTLD_GLOBAL);
+    if (libbinder) {
+        void (*startThreadPool)(void) = dlsym(libbinder, "ABinderProcess_startThreadPool");
+
+        if (startThreadPool) {
+            startThreadPool();
+            return;
+        }
     }
-    thread_pool_start = dlsym(lib, "NdkBinderUtilThreadCreate");
-    if (!thread_pool_start)
-        thread_pool_start = dlsym(lib, "NvTranscodeThreadCreate");
-    if (!thread_pool_start) {
-        av_log(NULL, AV_LOG_ERROR, "Binder initialization function not found\n");
-        atomic_store_explicit(&ret, AVERROR_ENCODER_NOT_FOUND, memory_order_relaxed);
-        return;
-    }
-    thread_pool_start();
-  }
-  else
-  {
+
+    // If we don't find that, try looking it up via env vars
     int result = ff_mediacodecndk_init_binder_imp();
     if (result)
         atomic_store_explicit(&ret, result, memory_order_relaxed);
-  }
 }
 
 int ff_mediacodecndk_init_binder(void)

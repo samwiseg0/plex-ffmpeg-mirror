@@ -27,6 +27,7 @@
  */
 
 #include "libavformat/http.h"
+#include "libavcodec/packet_internal.h"
 #include "libavutil/avstring.h"
 #include "libavutil/avassert.h"
 #include "libavutil/eval.h"
@@ -173,6 +174,10 @@ struct playlist {
     int64_t cur_ts_offset;
     int64_t last_pos;
     int discont_checked;
+
+    int individual_segments;
+    int has_next;
+    AVPacketList *dup_queue, *dup_queue_end;
 };
 
 /*
@@ -288,6 +293,7 @@ static void free_playlist_list(HLSContext *c)
             pls->ctx->pb = NULL;
             avformat_close_input(&pls->ctx);
         }
+        avpriv_packet_list_free(&pls->dup_queue, &pls->dup_queue_end);
         av_free(pls);
     }
     av_freep(&c->playlists);
@@ -702,13 +708,6 @@ static struct rendition *new_rendition(HLSContext *c, struct rendition_info *inf
         av_log(c->ctx, AV_LOG_ERROR, "The URI tag is REQUIRED for subtitle.\n");
         return NULL;
     }
-
-    /* TODO: handle subtitles (each segment has to parsed separately) */
-    if (c->ctx->strict_std_compliance > FF_COMPLIANCE_EXPERIMENTAL)
-        if (type == AVMEDIA_TYPE_SUBTITLE) {
-            av_log(c->ctx, AV_LOG_WARNING, "Can't support the subtitle(uri: %s)\n", info->uri);
-            return NULL;
-        }
 
     rend = av_mallocz(sizeof(struct rendition));
     if (!rend)
@@ -1809,6 +1808,11 @@ reload:
         }
     }
 
+    if (v->individual_segments && just_opened) {
+        v->has_next = 1;
+        return AVERROR_EOF;
+    }
+
     if (v->init_sec_buf_read_offset < v->init_sec_data_len) {
         /* Push init section out first before first actual segment */
         int copy_size = FFMIN(v->init_sec_data_len - v->init_sec_buf_read_offset, buf_size);
@@ -2172,6 +2176,9 @@ static int init_playlist(AVFormatContext *s, struct playlist *pls)
     pls->ctx->io_open  = nested_io_open;
     pls->ctx->flags   |= s->flags & ~AVFMT_FLAG_CUSTOM_IO;
 
+    if (!strcmp(in_fmt->name, "webvtt"))
+        pls->individual_segments = 1;
+
     if ((ret = ff_copy_whiteblacklists(pls->ctx, s)) < 0)
         goto fail;
 
@@ -2463,6 +2470,43 @@ static int compare_ts_with_wrapdetect(int64_t ts_a, struct playlist *pls_a,
     return av_compare_mod(scaled_ts_a, scaled_ts_b, 1LL << 33);
 }
 
+static int reopen_if_needed(struct playlist *pls)
+{
+    int ret;
+    ff_const59 struct AVInputFormat *in_fmt;
+
+    if (!pls->has_next)
+        return AVERROR_EOF;
+
+    in_fmt = pls->ctx->iformat;
+
+    pls->ctx->pb = NULL;
+    avformat_close_input(&pls->ctx);
+
+    if (!(pls->ctx = avformat_alloc_context())) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    pls->ctx->pb       = &pls->pb;
+    pls->ctx->io_open  = nested_io_open;
+    pls->ctx->flags   |= pls->parent->flags & ~AVFMT_FLAG_CUSTOM_IO;
+
+    if ((ret = ff_copy_whiteblacklists(pls->ctx, pls->parent)) < 0)
+        goto fail;
+
+    ret = avformat_open_input(&pls->ctx, pls->segments[pls->cur_seq_no - pls->start_seq_no]->url, in_fmt, NULL);
+    if (ret < 0)
+        goto fail;
+
+    pls->ctx->correct_ts_overflow = 0;
+
+    pls->has_next = 1;
+
+fail:
+    return ret;
+}
+
 static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     HLSContext *c = s->priv_data;
@@ -2482,8 +2526,14 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             while (1) {
                 int64_t ts_diff;
                 AVRational tb;
+retry:
                 ret = av_read_frame(pls->ctx, &pls->pkt);
                 if (ret < 0) {
+                    if (ret == AVERROR_EOF) {
+                        ret = reopen_if_needed(pls);
+                        if (ret >= 0)
+                            goto retry;
+                    }
                     if (!avio_feof(&pls->pb) && ret != AVERROR_EOF)
                         return ret;
                     break;
@@ -2498,6 +2548,34 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                         pls->pkt.dts       != AV_NOPTS_VALUE)
                         c->first_timestamp = av_rescale_q(pls->pkt.dts,
                             get_timebase(pls), AV_TIME_BASE_Q);
+                }
+
+                if (pls->individual_segments) {
+                    AVPacketList *q;
+                    while (pls->dup_queue) {
+                        if (pls->dup_queue->pkt.pts >= pls->pkt.pts)
+                            break;
+                        if (pls->dup_queue->pkt.pts < pls->pkt.pts) {
+                            AVPacket to_unref;
+                            avpriv_packet_list_get(&pls->dup_queue, &pls->dup_queue_end, &to_unref);
+                            av_packet_unref(&to_unref);
+                        }
+                    }
+                    for (q = pls->dup_queue; q; q = q->next) {
+                        if (pls->dup_queue->pkt.pts > pls->pkt.pts)
+                            break;
+                        if (pls->dup_queue->pkt.pts          == pls->pkt.pts &&
+                            pls->dup_queue->pkt.duration     == pls->pkt.duration &&
+                            pls->dup_queue->pkt.stream_index == pls->pkt.stream_index &&
+                            pls->dup_queue->pkt.size         == pls->pkt.size &&
+                            !memcmp(pls->dup_queue->pkt.data, pls->pkt.data, pls->pkt.size)) {
+                            av_packet_unref(&pls->pkt);
+                            goto retry;
+                        }
+                    }
+                    ret = avpriv_packet_list_put(&pls->dup_queue, &pls->dup_queue_end, &pls->pkt, av_packet_ref, 0);
+                    if (ret < 0)
+                        return ret;
                 }
 
                 if (c->linearize_timestamps) {
