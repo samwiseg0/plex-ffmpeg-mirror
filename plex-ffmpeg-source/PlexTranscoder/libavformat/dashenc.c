@@ -2180,6 +2180,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     if (((pkt->flags & AV_PKT_FLAG_KEY) || c->break_non_keyframes) && os->packets_written &&
+        (!c->has_video || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) && //PLEX
         av_compare_ts(elapsed_duration, st->time_base,
                       seg_end_duration, AV_TIME_BASE_Q) >= 0) {
         if (!c->has_video || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
