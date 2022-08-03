@@ -116,6 +116,7 @@ $(PROGS): %$(PROGSSUF)$(EXESUF): %$(PROGSSUF)_g$(EXESUF)
 ifeq ($(STRIPTYPE),direct)
 	$(STRIP) -o $@ $<
 else
+	$(RM) $@
 	$(CP) $< $@
 	$(STRIP) $@
 endif

@@ -175,6 +175,9 @@ struct playlist {
     int64_t last_pos;
     int discont_checked;
 
+    int64_t wait_for_dts;
+    int wait_for_first;
+
     int individual_segments;
     int has_next;
     AVPacketList *dup_queue, *dup_queue_end;
@@ -465,6 +468,9 @@ static int set_stream_codec(AVStream *st, char *codecs)
     } else if (!strncmp(codecs, "av01.", 5)) {
         params->codec_id = AV_CODEC_ID_AV1; // Profile/level data not parsed
         return 1;
+    } else if (!strcmp(codecs, "webvtt")) {
+        params->codec_id = AV_CODEC_ID_WEBVTT;
+        return 1;
     } else {
         return 0;
     }
@@ -479,7 +485,7 @@ static int set_stream_params_from_playlist_data(AVStream *st, struct variant *va
 
     par->codec_type = desc->type;
 
-    if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
+    if (par->codec_type == AVMEDIA_TYPE_VIDEO && var) {
         if (var->width && var->height) {
             par->width  = var->width;
             par->height = var->height;
@@ -499,7 +505,15 @@ static int update_streams_from_playlist(AVFormatContext *s, struct playlist *pls
 {
     int err;
     char codecs[MAX_FIELD_LEN];
-    strcpy(codecs, var->codecs);
+
+    if (var)
+        av_strlcpy(codecs, var->codecs, sizeof(codecs));
+    else if (pls->n_renditions == 1 &&
+             pls->renditions[0]->playlist == pls &&
+             pls->renditions[0]->type == AVMEDIA_TYPE_SUBTITLE)
+        av_strlcpy(codecs, "webvtt", sizeof(codecs));
+    else
+        return 0;
 
     char *buf = codecs, *tok;
 
@@ -2152,7 +2166,7 @@ static int init_playlist(AVFormatContext *s, struct playlist *pls)
         if ((ret = parse_playlist(c, pls->url, pls, NULL)) < 0) {
             av_log(s, AV_LOG_WARNING, "parse_playlist error %s [%s]\n", av_err2str(ret), pls->url);
             pls->broken = 1;
-            if (c->n_playlists > 1)
+            if (c->n_playlists > 1 && ret != AVERROR_EXIT)
                 ret = 0;
             goto fail;
         }
@@ -2178,6 +2192,8 @@ static int init_playlist(AVFormatContext *s, struct playlist *pls)
 
     if (!strcmp(in_fmt->name, "webvtt"))
         pls->individual_segments = 1;
+
+    pls->wait_for_dts = AV_NOPTS_VALUE;
 
     if ((ret = ff_copy_whiteblacklists(pls->ctx, s)) < 0)
         goto fail;
@@ -2287,6 +2303,11 @@ static int hls_read_header(AVFormatContext *s)
 
         if (v->codecs[0] && c->defer_probing)
             update_streams_from_playlist(c->ctx, v->playlists[0], v);
+    }
+
+    for (i = 0; i < c->n_renditions; i++) {
+        if (c->renditions[i]->playlist)
+            update_streams_from_playlist(c->ctx, c->renditions[i]->playlist, NULL);
     }
 
     /* If the playlist only contained playlists (Master Playlist),
@@ -2511,10 +2532,12 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     HLSContext *c = s->priv_data;
     int ret, i, minplaylist = -1;
+    int do_retry = 0;
 
     recheck_discard_flags(s, c->first_packet);
     c->first_packet = 0;
 
+retry:
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
         /* Make sure we've got one buffered packet from each open playlist
@@ -2523,16 +2546,45 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             if (!pls->initialized && (ret = init_playlist(s, pls)) < 0)
                 return ret;
 
+            if (do_retry)
+                pls->wait_for_dts = AV_NOPTS_VALUE;
+
+            if (pls->wait_for_dts != AV_NOPTS_VALUE) {
+                if (c->cur_timestamp == AV_NOPTS_VALUE)
+                    continue;
+
+                if (pls->wait_for_first) {
+                    pls->wait_for_dts += c->cur_timestamp;
+                    pls->wait_for_first = 0;
+                    continue;
+                }
+
+                if (c->cur_timestamp < pls->wait_for_dts)
+                    continue;
+
+                pls->wait_for_dts = AV_NOPTS_VALUE;
+            }
+
             while (1) {
                 int64_t ts_diff;
                 AVRational tb;
-retry:
                 ret = av_read_frame(pls->ctx, &pls->pkt);
                 if (ret < 0) {
                     if (ret == AVERROR_EOF) {
+                        struct segment *cur_seg = current_segment(pls);
+
+                        if (c->cur_timestamp == AV_NOPTS_VALUE) {
+                            pls->wait_for_first = 1;
+                            pls->wait_for_dts = cur_seg ? cur_seg->duration : AV_NOPTS_VALUE;
+                        } else {
+                            pls->wait_for_first = 0;
+                            pls->wait_for_dts = cur_seg ? (c->cur_timestamp + current_segment(pls)->duration) : AV_NOPTS_VALUE;
+                        }
                         ret = reopen_if_needed(pls);
-                        if (ret >= 0)
-                            goto retry;
+                        if (ret >= 0) {
+                            do_retry = 1;
+                            break;
+                        }
                     }
                     if (!avio_feof(&pls->pb) && ret != AVERROR_EOF)
                         return ret;
@@ -2720,6 +2772,8 @@ retry:
 
         return 0;
     }
+    if (do_retry)
+        goto retry;
     return AVERROR_EOF;
 }
 

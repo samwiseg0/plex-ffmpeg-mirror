@@ -213,7 +213,7 @@ static int webvtt_read_packet(AVFormatContext *s, AVPacket *pkt)
     WebVTTContext *webvtt = s->priv_data;
     int ret = ff_subtitles_queue_read_packet(&webvtt->q, pkt);
 
-    if (ret >= 0 && webvtt->is_hls) {
+    if (ret >= 0 && webvtt->is_hls && webvtt->handle_hls_map) {
         pkt->duration *= 90;
         pkt->pts *= 90;
         pkt->pts += webvtt->ts_offset;

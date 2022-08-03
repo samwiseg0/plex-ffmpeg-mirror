@@ -314,6 +314,12 @@ typedef struct AVIOContext {
     const char *protocol_blacklist;
 
     /**
+     * Append all data read or written to this file.
+     */
+    const char *trace_file;
+    int trace_fd;
+
+    /**
      * A callback that is used instead of write_packet.
      */
     int (*write_data_type)(void *opaque, uint8_t *buf, int buf_size,

@@ -31,7 +31,9 @@
 #include "avio_internal.h"
 #include "internal.h"
 #include "url.h"
+#include <fcntl.h>
 #include <stdarg.h>
+#include <unistd.h>
 
 #define IO_BUFFER_SIZE 32768
 
@@ -67,6 +69,7 @@ static const AVClass *child_class_iterate(void **iter)
 #define D AV_OPT_FLAG_DECODING_PARAM
 static const AVOption ff_avio_options[] = {
     {"protocol_whitelist", "List of protocols that are allowed to be used", OFFSET(protocol_whitelist), AV_OPT_TYPE_STRING, { .str = NULL },  0, 0, D },
+    {"trace_file", "Append all data read or written to this file", OFFSET(trace_file), AV_OPT_TYPE_STRING, { .str = NULL },  0, 0, D },
     { NULL },
 };
 
@@ -115,6 +118,7 @@ int ffio_init_context(AVIOContext *s,
     s->seekable        = seek ? AVIO_SEEKABLE_NORMAL : 0;
     s->min_packet_size = 0;
     s->max_packet_size = 0;
+    s->trace_fd = -1;
     s->update_checksum = NULL;
     s->short_seek_threshold = SHORT_SEEK_THRESHOLD;
 
@@ -523,6 +527,12 @@ static int read_packet_wrapper(AVIOContext *s, uint8_t *buf, int size)
     if (!s->read_packet)
         return AVERROR(EINVAL);
     ret = s->read_packet(s->opaque, buf, size);
+    if (s->trace_file && ret > 0) {
+        if (s->trace_fd < 0)
+            s->trace_fd = avpriv_open(s->trace_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (s->trace_fd >= 0)
+            write(s->trace_fd, buf, ret);
+    }
 #if FF_API_OLD_AVIO_EOF_0
     if (!ret && !s->max_packet_size) {
         av_log(NULL, AV_LOG_WARNING, "Invalid return value 0 for stream protocol\n");
@@ -1158,9 +1168,14 @@ int ffio_open_whitelist(AVIOContext **s, const char *filename, int flags,
         return err;
     err = ffio_fdopen(s, h);
     if (err < 0) {
+fail:
         ffurl_close(h);
         return err;
     }
+
+    if ((err = av_opt_set_dict(*s, options)) < 0)
+        goto fail;
+
     return 0;
 }
 
@@ -1180,6 +1195,9 @@ int avio_close(AVIOContext *s)
     avio_flush(s);
     h         = s->opaque;
     s->opaque = NULL;
+
+    if (s->trace_fd >= 0)
+        close(s->trace_fd);
 
     av_freep(&s->buffer);
     if (s->write_flag)

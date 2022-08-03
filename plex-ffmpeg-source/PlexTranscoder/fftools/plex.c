@@ -160,11 +160,15 @@ void PMS_Log(LogLevel level, const char* format, ...)
     av_bprint_init_for_buffer(&dstbuf, url, sizeof(url));
 
     // Build the URL.
-    av_bprintf(&dstbuf, "http://127.0.0.1:32400/log?level=%d&source=Transcoder&message=", level);
+    if (plexContext.progress_url)
+        av_bprintf(&dstbuf, "%s/log?", plexContext.progress_url);
+    else
+        av_bprintf(&dstbuf, "http://127.0.0.1:32400/log?source=Transcoder&");
+    av_bprintf(&dstbuf, "level=%d&message=", level);
     av_bprint_escape(&dstbuf, msg, NULL, AV_ESCAPE_MODE_URL, 0);
 
     // Issue the request.
-    av_free(PMS_IssueHttpRequest(url, "GET"));
+    av_free(PMS_IssueHttpRequest(url, "POST"));
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
