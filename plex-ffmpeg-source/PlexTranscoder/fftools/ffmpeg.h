@@ -199,6 +199,8 @@ typedef struct OptionsContext {
     int        nb_copy_initial_nonkeyframes;
     SpecifierOpt *copy_prior_start;
     int        nb_copy_prior_start;
+    SpecifierOpt *strict_ts;
+    int        nb_strict_ts;
     SpecifierOpt *filters;
     int        nb_filters;
     SpecifierOpt *filter_scripts;
@@ -541,6 +543,7 @@ typedef struct OutputStream {
     const char *attachment_filename;
     int copy_initial_nonkeyframes;
     int copy_prior_start;
+    int strict_ts;
     char *disposition;
 
     int keep_pix_fmt;

@@ -828,7 +828,10 @@ static void write_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost, int u
             pkt->dts != AV_NOPTS_VALUE &&
             !(st->codecpar->codec_id == AV_CODEC_ID_VP9 && ost->stream_copy) &&
             ost->last_mux_dts != AV_NOPTS_VALUE) {
-            int64_t max = ost->last_mux_dts + !(s->oformat->flags & AVFMT_TS_NONSTRICT);
+            int strict_ts = ost->strict_ts;
+            if (strict_ts == -1)
+                strict_ts = !(s->oformat->flags & AVFMT_TS_NONSTRICT);
+            int64_t max = ost->last_mux_dts + strict_ts;
             if (pkt->dts < max) {
                 int loglevel = max - pkt->dts > 2 || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ? AV_LOG_WARNING : AV_LOG_DEBUG;
                 if (exit_on_error)

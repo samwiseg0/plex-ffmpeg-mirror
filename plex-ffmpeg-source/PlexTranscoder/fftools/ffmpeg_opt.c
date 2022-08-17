@@ -85,6 +85,7 @@ static const char *const opt_name_top_field_first[]           = {"top", NULL};
 static const char *const opt_name_presets[]                   = {"pre", "apre", "vpre", "spre", NULL};
 static const char *const opt_name_copy_initial_nonkeyframes[] = {"copyinkfr", NULL};
 static const char *const opt_name_copy_prior_start[]          = {"copypriorss", NULL};
+static const char *const opt_name_strict_ts[]                 = {"strict_ts", NULL};
 static const char *const opt_name_filters[]                   = {"filter", "af", "vf", NULL};
 static const char *const opt_name_filter_scripts[]            = {"filter_script", NULL};
 static const char *const opt_name_reinit_filters[]            = {"reinit_filter", NULL};
@@ -1625,6 +1626,9 @@ static OutputStream *new_output_stream(OptionsContext *o, AVFormatContext *oc, e
 
     ost->copy_prior_start = -1;
     MATCH_PER_STREAM_OPT(copy_prior_start, i, ost->copy_prior_start, oc ,st);
+
+    ost->strict_ts = -1;
+    MATCH_PER_STREAM_OPT(strict_ts, i, ost->strict_ts, oc, st);
 
     MATCH_PER_STREAM_OPT(bitstream_filters, str, bsfs, oc, st);
     if (bsfs && *bsfs) {
@@ -3686,6 +3690,8 @@ const OptionDef options[] = {
         "copy initial non-keyframes" },
     { "copypriorss",    OPT_INT | HAS_ARG | OPT_EXPERT | OPT_SPEC | OPT_OUTPUT,   { .off = OFFSET(copy_prior_start) },
         "copy or discard frames before start time" },
+    { "strict_ts",      OPT_INT | HAS_ARG | OPT_EXPERT | OPT_SPEC | OPT_OUTPUT,   { .off = OFFSET(strict_ts) },
+        "require strictly-increasing timestamps" },
     { "frames",         OPT_INT64 | HAS_ARG | OPT_SPEC | OPT_OUTPUT, { .off = OFFSET(max_frames) },
         "set the number of frames to output", "number" },
     { "tag",            OPT_STRING | HAS_ARG | OPT_SPEC |
