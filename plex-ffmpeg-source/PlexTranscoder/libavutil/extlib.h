@@ -24,6 +24,8 @@
 #include "libavcodec/avcodec.h"
 #include "libavutil/avstring.h"
 
+struct FFCodec;
+
 typedef struct FFLibrary {
     int is_master; // deprecated
     char *loaded_dso_list;
@@ -32,7 +34,7 @@ typedef struct FFLibrary {
 
     // libavcodec (NULL for other libs)
     unsigned (*avcodec_version)(void);
-    void (*avcodec_register)(struct AVCodec *codec);
+    void (*avcodec_register)(struct FFCodec *codec);
 } FFLibrary;
 
 typedef int (*AVInitLibrary)(FFLibrary* lib, int level);

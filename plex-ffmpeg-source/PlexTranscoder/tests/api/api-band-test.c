@@ -66,7 +66,7 @@ static void draw_horiz_band(AVCodecContext *ctx, const AVFrame *fr, int offset[4
 
 static int video_decode(const char *input_filename)
 {
-    AVCodec *codec = NULL;
+    const AVCodec *codec = NULL;
     AVCodecContext *ctx= NULL;
     AVCodecParameters *origin_par = NULL;
     uint8_t *byte_buffer = NULL;
@@ -167,10 +167,8 @@ static int video_decode(const char *input_filename)
             continue;
         }
 
-        if (result < 0)
-            result = avcodec_send_packet(ctx, NULL);
-        else
-            result = avcodec_send_packet(ctx, pkt);
+        // pkt will be empty on read error/EOF
+        result = avcodec_send_packet(ctx, pkt);
 
         av_packet_unref(pkt);
 

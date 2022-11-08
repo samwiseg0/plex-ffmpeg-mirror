@@ -28,6 +28,7 @@
 #include <android/native_window.h>
 #include <media/NdkMediaCodec.h>
 #include "avcodec.h"
+#include "codec_internal.h"
 #include "decode.h"
 #include "internal.h"
 #include "h264.h"
@@ -134,8 +135,8 @@ fail:
 static void mediacodecndk_free_buffer(void *opaque, uint8_t *data)
 {
     AVBufferRef *decoder_ref = opaque;
-    av_log(NULL, AV_LOG_DEBUG, "Releasing buffer: %" PRId32 "\n", (int32_t)data);
-    AMediaCodec_releaseOutputBuffer(av_buffer_get_opaque(decoder_ref), (int32_t)data, false);
+    av_log(NULL, AV_LOG_DEBUG, "Releasing buffer: %zu\n", (size_t)data);
+    AMediaCodec_releaseOutputBuffer(av_buffer_get_opaque(decoder_ref), (size_t)data, false);
     av_buffer_unref(&decoder_ref);
 }
 
@@ -179,7 +180,7 @@ static int mediacodecndk_receive(AVCodecContext *avctx, AVFrame* frame)
                 AMediaFormat_delete(format);
 
                 avctx->sample_rate = sample_rate;
-                avctx->channels = channels;
+                av_channel_layout_default(&avctx->ch_layout, channels);
             } else {
                 enum AVPixelFormat pix_fmt;
                 int32_t width = 0, height = 0, crop_width = 0, crop_height = 0, stride = 0, slice_height = 0, color_format = 0;
@@ -240,7 +241,7 @@ static int mediacodecndk_receive(AVCodecContext *avctx, AVFrame* frame)
     out_buffer = AMediaCodec_getOutputBuffer(ctx->decoder, out_index, &out_size);
 
     if (avctx->codec->type == AVMEDIA_TYPE_AUDIO) {
-        frame->nb_samples = bufferInfo.size / avctx->channels / 2;
+        frame->nb_samples = bufferInfo.size / avctx->ch_layout.nb_channels / 2;
     }
 
     if ((ret = ff_decode_frame_props(avctx, frame)) < 0)
@@ -368,18 +369,18 @@ static av_cold void mediacodecndk_decode_flush(AVCodecContext *avctx)
     };
 
 #define FFMC_DEC(TYPE, NAME, ID, BSFS) \
-    AVCodec ff_##NAME##_mediacodecndk_decoder = { \
-        .name           = #NAME "_mediacodecndk", \
-        .long_name      = NULL_IF_CONFIG_SMALL(#NAME " (MediaCodec NDK)"), \
-        .type           = AVMEDIA_TYPE_##TYPE, \
-        .id             = ID, \
+    const FFCodec ff_##NAME##_mediacodecndk_decoder = { \
+        .p.name         = #NAME "_mediacodecndk", \
+        .p.long_name    = NULL_IF_CONFIG_SMALL(#NAME " (MediaCodec NDK)"), \
+        .p.type         = AVMEDIA_TYPE_##TYPE, \
+        .p.id           = ID, \
         .priv_data_size = sizeof(MediaCodecNDKDecoderContext), \
         .init           = mediacodecndk_decode_init, \
         .close          = mediacodecndk_decode_close, \
         .receive_frame  = mediacodecndk_receive_frame, \
         .flush          = mediacodecndk_decode_flush, \
-        .priv_class     = &ffmediacodecndk_##NAME##_dec_class, \
-        .capabilities   = AV_CODEC_CAP_DELAY, \
+        .p.priv_class   = &ffmediacodecndk_##NAME##_dec_class, \
+        .p.capabilities = AV_CODEC_CAP_DELAY, \
         .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP, \
         .bsfs           = BSFS, \
     };

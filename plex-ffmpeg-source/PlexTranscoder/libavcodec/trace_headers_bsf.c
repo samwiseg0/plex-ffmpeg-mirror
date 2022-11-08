@@ -16,10 +16,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdio.h>
+#include <inttypes.h>
 
 #include "libavutil/avstring.h"
-#include "libavutil/common.h"
+#include "libavutil/avutil.h"
 #include "libavutil/log.h"
 
 #include "bsf.h"
@@ -94,6 +94,19 @@ static int trace_headers(AVBSFContext *bsf, AVPacket *pkt)
         av_strlcatf(tmp, sizeof(tmp), ", duration %"PRId64, pkt->duration);
 
     av_log(bsf, AV_LOG_INFO, "Packet: %d bytes%s.\n", pkt->size, tmp);
+
+    if (av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA, NULL)) {
+        av_log(bsf, AV_LOG_INFO, "Side data:\n");
+
+        err = ff_cbs_read_packet_side_data(ctx->cbc, frag, pkt);
+        ff_cbs_fragment_reset(frag);
+
+        if (err < 0) {
+            av_packet_unref(pkt);
+            return err;
+        }
+        av_log(bsf, AV_LOG_INFO, "Payload:\n");
+    }
 
     err = ff_cbs_read_packet(ctx->cbc, frag, pkt);
 

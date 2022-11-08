@@ -26,6 +26,7 @@
 
 #include "ac3dec_data.h"
 #include "ac3.h"
+#include "config_components.h"
 
 /**
  * Table used to ungroup 3 values stored in 5 bits.

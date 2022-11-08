@@ -19,6 +19,7 @@
 #define _WIN32_WINNT 0x0601
 
 #include "avcodec.h"
+#include "codec_internal.h"
 #include "decode.h"
 #include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
@@ -70,6 +71,7 @@ typedef struct MFContext {
     int opt_out_samples;
     int opt_d3d_bind_flags;
     int opt_enc_d3d;
+    AVChannelLayout downmix_layout;
 } MFContext;
 
 static int mf_choose_output_type(AVCodecContext *avctx);
@@ -200,12 +202,12 @@ static int mf_deca_output_type_get(AVCodecContext *avctx, IMFMediaType *type)
     hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, &t);
     if (FAILED(hr))
         return AVERROR_EXTERNAL;
-    avctx->channels = t;
-    avctx->channel_layout = av_get_default_channel_layout(t);
 
     hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_CHANNEL_MASK, &t);
     if (!FAILED(hr))
-        avctx->channel_layout = t;
+        av_channel_layout_from_mask(&avctx->ch_layout, t);
+    else
+        av_channel_layout_default(&avctx->ch_layout, t);
 
     hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, &t);
     if (FAILED(hr))
@@ -214,7 +216,7 @@ static int mf_deca_output_type_get(AVCodecContext *avctx, IMFMediaType *type)
 
     avctx->sample_fmt = ff_media_type_to_sample_fmt((IMFAttributes *)type);
 
-    if (avctx->sample_fmt == AV_SAMPLE_FMT_NONE || !avctx->channels)
+    if (avctx->sample_fmt == AV_SAMPLE_FMT_NONE || !avctx->ch_layout.nb_channels)
         return AVERROR_EXTERNAL;
 
     return 0;
@@ -451,7 +453,7 @@ static int mf_sample_to_a_avframe(AVCodecContext *avctx, IMFSample *sample, AVFr
     if (FAILED(hr))
         return AVERROR_EXTERNAL;
 
-    bps = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->channels;
+    bps = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels;
 
     frame->nb_samples = len / bps;
     if (frame->nb_samples * bps != len)
@@ -785,7 +787,7 @@ static int64_t mf_enca_output_score(AVCodecContext *avctx, IMFMediaType *type)
         score |= 1LL << 32;
 
     hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, &t);
-    if (!FAILED(hr) && t == avctx->channels)
+    if (!FAILED(hr) && t == avctx->ch_layout.nb_channels)
         score |= 2LL << 32;
 
     hr = IMFAttributes_GetGUID(type, &MF_MT_SUBTYPE, &tg);
@@ -839,7 +841,7 @@ static int64_t mf_enca_input_score(AVCodecContext *avctx, IMFMediaType *type)
         score |= 2;
 
     hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, &t);
-    if (!FAILED(hr) && t == avctx->channels)
+    if (!FAILED(hr) && t == avctx->ch_layout.nb_channels)
         score |= 4;
 
     return score;
@@ -863,7 +865,7 @@ static int mf_enca_input_adjust(AVCodecContext *avctx, IMFMediaType *type)
     }
 
     hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, &t);
-    if (FAILED(hr) || t != avctx->channels) {
+    if (FAILED(hr) || t != avctx->ch_layout.nb_channels) {
         av_log(avctx, AV_LOG_ERROR, "unsupported input channel number set\n");
         return AVERROR(EINVAL);
     }
@@ -961,7 +963,7 @@ static int mf_deca_input_adjust(AVCodecContext *avctx, IMFMediaType *type)
     MFContext *c = avctx->priv_data;
 
     int sample_rate = avctx->sample_rate;
-    int channels = avctx->channels;
+    int channels = avctx->ch_layout.nb_channels;
 
     IMFAttributes_SetGUID(type, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio);
     IMFAttributes_SetGUID(type, &MF_MT_SUBTYPE, &c->main_subtype);
@@ -979,7 +981,7 @@ static int mf_deca_input_adjust(AVCodecContext *avctx, IMFMediaType *type)
         if (avctx->extradata_size) {
             MPEG4AudioConfig c = {0};
             memcpy(ed + 12, avctx->extradata, avctx->extradata_size);
-            if (avpriv_mpeg4audio_get_config(&c, avctx->extradata, avctx->extradata_size * 8, 0) >= 0) {
+            if (avpriv_mpeg4audio_get_config2(&c, avctx->extradata, avctx->extradata_size, 0, avctx) >= 0) {
                 if (c.channels > 0)
                     channels = c.channels;
                 sample_rate = c.sample_rate;
@@ -1107,7 +1109,7 @@ static int64_t mf_deca_output_score(AVCodecContext *avctx, IMFMediaType *type)
     // Prefer equal or larger channel count.
     hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, &t);
     if (!FAILED(hr)) {
-        int channels = av_get_channel_layout_nb_channels(avctx->request_channel_layout);
+        int channels = c->downmix_layout.nb_channels;
         int64_t ch_score = 0;
         int diff;
         if (channels < 1)
@@ -1151,8 +1153,8 @@ static int mf_deca_output_adjust(AVCodecContext *avctx, IMFMediaType *type)
     IMFAttributes_SetGUID(type, &MF_MT_SUBTYPE, &MFAudioFormat_Float);
     IMFAttributes_SetUINT32(type, &MF_MT_AUDIO_BITS_PER_SAMPLE, 32);
 
-    block_align *= avctx->channels;
-    IMFAttributes_SetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, avctx->channels);
+    block_align *= avctx->ch_layout.nb_channels;
+    IMFAttributes_SetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, avctx->ch_layout.nb_channels);
 
     IMFAttributes_SetUINT32(type, &MF_MT_AUDIO_BLOCK_ALIGNMENT, block_align);
 
@@ -1710,7 +1712,7 @@ static int mf_init(AVCodecContext *avctx)
     if (!c->tmp_frame)
         return AVERROR(ENOMEM);
 
-    c->original_channels = avctx->channels;
+    c->original_channels = avctx->ch_layout.nb_channels;
 
     c->is_dec = av_codec_is_decoder(avctx->codec);
     c->is_enc = !c->is_dec;
@@ -1857,18 +1859,18 @@ static int mf_close(AVCodecContext *avctx)
         .option     = OPTS,                                                    \
         .version    = LIBAVUTIL_VERSION_INT,                                   \
     };                                                                         \
-    AVCodec ff_ ## NAME ## _mf_decoder = {                                     \
-        .priv_class     = &ff_ ## NAME ## _mf_decoder_class,                   \
-        .name           = #NAME "_mf",                                         \
-        .long_name      = NULL_IF_CONFIG_SMALL(#ID " via MediaFoundation"),    \
-        .type           = AVMEDIA_TYPE_ ## MEDIATYPE,                          \
-        .id             = AV_CODEC_ID_ ## ID,                                  \
+    const FFCodec ff_ ## NAME ## _mf_decoder = {                               \
+        .p.priv_class   = &ff_ ## NAME ## _mf_decoder_class,                   \
+        .p.name         = #NAME "_mf",                                         \
+        .p.long_name    = NULL_IF_CONFIG_SMALL(#ID " via MediaFoundation"),    \
+        .p.type         = AVMEDIA_TYPE_ ## MEDIATYPE,                          \
+        .p.id           = AV_CODEC_ID_ ## ID,                                  \
         .priv_data_size = sizeof(MFContext),                                   \
         .init           = mf_init,                                             \
         .close          = mf_close,                                            \
         .receive_frame  = mf_receive_frame,                                    \
         .flush          = mf_flush,                                            \
-        .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,     \
+        .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,     \
         .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |                          \
                           FF_CODEC_CAP_INIT_THREADSAFE |                       \
                           FF_CODEC_CAP_INIT_CLEANUP,                           \

@@ -41,6 +41,7 @@
 #include "avfilter.h"
 #include "colorspace.h"
 #include "cuda/host_util.h"
+#include "cuda/load_helper.h"
 #include "cuda/shared.h"
 #include "cuda/tonemap.h"
 #include "dither_matrix.h"
@@ -152,16 +153,6 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_frame_free(&s->frame);
     av_buffer_unref(&s->frames_ctx);
     av_frame_free(&s->tmp_frame);
-}
-
-static int query_formats(AVFilterContext *ctx)
-{
-    static const enum AVPixelFormat pixel_formats[] = {
-        AV_PIX_FMT_CUDA, AV_PIX_FMT_NONE,
-    };
-    AVFilterFormats *pix_fmts = ff_make_format_list(pixel_formats);
-
-    return ff_set_common_formats(ctx, pix_fmts);
 }
 
 static av_cold int init_stage(TonemapCUDAContext *s, AVBufferRef *device_ctx,
@@ -298,7 +289,8 @@ static av_cold int compile(AVFilterLink *inlink)
     CUjit_option options[] = {CU_JIT_INFO_LOG_BUFFER, CU_JIT_ERROR_LOG_BUFFER, CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES, CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES};
     void *option_values[]  = {&info_log,              &error_log,              (void*)(intptr_t)sizeof(info_log), (void*)(intptr_t)sizeof(error_log)};
 
-    extern char tonemap_ptx[];
+    extern const unsigned char ff_tonemap_ptx_data[];
+    extern const unsigned int ff_tonemap_ptx_len;
 
     if (in_spc == AVCOL_SPC_UNSPECIFIED)
         in_spc = AVCOL_SPC_BT2020_NCL;
@@ -388,8 +380,8 @@ static av_cold int compile(AVFilterLink *inlink)
     if (ret < 0)
         goto fail2;
 
-    ret = CHECK_CU(cu->cuLinkAddData(link_state, CU_JIT_INPUT_PTX, tonemap_ptx,
-                                     strlen(tonemap_ptx), "tonemap.ptx", 0, NULL, NULL));
+    ret = ff_cuda_link_add_data(ctx, s->hwctx, link_state, ff_tonemap_ptx_data,
+                                ff_tonemap_ptx_len, "tonemap.ptx", 0, NULL, NULL);
     if (ret < 0)
         goto fail2;
 
@@ -600,7 +592,6 @@ static const AVFilterPad inputs[] = {
         .type        = AVMEDIA_TYPE_VIDEO,
         .filter_frame = filter_frame,
     },
-    { NULL }
 };
 
 static const AVFilterPad outputs[] = {
@@ -609,22 +600,21 @@ static const AVFilterPad outputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = config_props,
     },
-    { NULL }
 };
 
-AVFilter ff_vf_tonemap_cuda = {
+const AVFilter ff_vf_tonemap_cuda = {
     .name        = "tonemap_cuda",
     .description = NULL_IF_CONFIG_SMALL("GPU accelerated HDR-to-SDR tone mapping"),
 
     .init          = init,
     .uninit        = uninit,
-    .query_formats = query_formats,
 
     .priv_size  = sizeof(TonemapCUDAContext),
     .priv_class = &tonemap_cuda_class,
 
-    .inputs  = inputs,
-    .outputs = outputs,
+    FILTER_INPUTS(inputs),
+    FILTER_OUTPUTS(outputs),
+    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_CUDA),
 
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
 };

@@ -22,9 +22,9 @@
 #ifndef AVFORMAT_MATROSKA_H
 #define AVFORMAT_MATROSKA_H
 
-#include "libavcodec/avcodec.h"
+#include "libavcodec/codec_id.h"
+#include "avformat.h"
 #include "metadata.h"
-#include "internal.h"
 
 /* EBML version supported */
 #define EBML_VERSION 1
@@ -98,6 +98,11 @@
 #define MATROSKA_ID_TRACKFLAGENABLED 0xB9
 #define MATROSKA_ID_TRACKFLAGDEFAULT 0x88
 #define MATROSKA_ID_TRACKFLAGFORCED 0x55AA
+#define MATROSKA_ID_TRACKFLAGHEARINGIMPAIRED  0x55AB
+#define MATROSKA_ID_TRACKFLAGVISUALIMPAIRED   0x55AC
+#define MATROSKA_ID_TRACKFLAGTEXTDESCRIPTIONS 0x55AD
+#define MATROSKA_ID_TRACKFLAGORIGINAL         0x55AE
+#define MATROSKA_ID_TRACKFLAGCOMMENTARY       0x55AF
 #define MATROSKA_ID_TRACKFLAGLACING 0x9C
 #define MATROSKA_ID_TRACKMINCACHE 0x6DE7
 #define MATROSKA_ID_TRACKMAXCACHE 0x6DF8
@@ -386,5 +391,7 @@ extern const char * const ff_matroska_video_stereo_plane[MATROSKA_VIDEO_STEREO_P
 #define CODEC_PRIVATE_SIZE "webm_dash_manifest_codec_priv_size"
 
 int ff_mkv_stereo3d_conv(AVStream *st, MatroskaVideoStereoModeType stereo_mode);
+
+#define DVCC_DVVC_BLOCK_TYPE_NAME "Dolby Vision configuration"
 
 #endif /* AVFORMAT_MATROSKA_H */

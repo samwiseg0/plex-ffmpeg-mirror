@@ -20,6 +20,9 @@
 
 #include "plex.h"
 #include "ffmpeg.h"
+#include "opt_common.h"
+
+#include "config_components.h"
 
 #include <sys/types.h>
 #include <limits.h>
@@ -27,6 +30,7 @@
 #include "libavcodec/mpegvideo.h"
 #include "libavfilter/vf_inlineass.h"
 #include "libavformat/http.h"
+#include "libavutil/bprint.h"
 #include "libavutil/timestamp.h"
 #include "libavformat/internal.h"
 #include "libavutil/thread.h"
@@ -255,11 +259,13 @@ void plex_report_stream(const AVStream *st)
     }
 }
 
-void plex_report_stream_detail(const AVStream *st)
+void plex_report_stream_detail(AVStream *st)
 {
+    FFStream *const sti = ffstream(st);
+
     if ((st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
          st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
-        st->codec_info_nb_frames == 0)
+        sti->codec_info_nb_frames == 0)
         return; // Unparsed stream; will be skipped in output
 
     if (plexContext.progress_url &&
@@ -309,16 +315,15 @@ void plex_report_stream_detail(const AVStream *st)
             if (st->avg_frame_rate.num && st->avg_frame_rate.den)
                 av_bprintf(&dstbuf, "&frameRate=%.3f",
                             av_q2d(st->avg_frame_rate));
-            if (st->internal && st->internal->avctx &&
-                st->internal->avctx->properties & FF_CODEC_PROPERTY_CLOSED_CAPTIONS)
+            if (sti && sti->avctx &&
+                sti->avctx->properties & FF_CODEC_PROPERTY_CLOSED_CAPTIONS)
                 av_bprintf(&dstbuf, "&closedCaptions=1");
         } else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
             char layout[256];
             char *layoutP = layout;
             char *l, *r;
-            av_bprintf(&dstbuf, "&channels=%i", st->codecpar->channels);
-            av_get_channel_layout_string(layout, sizeof(layout), st->codecpar->channels,
-                                         st->codecpar->channel_layout);
+            av_bprintf(&dstbuf, "&channels=%i", st->codecpar->ch_layout.nb_channels);
+            av_channel_layout_describe(&st->codecpar->ch_layout, layout, sizeof(layout));
             l = strchr(layout, '(');
             r = strrchr(layout, ')');
             if (l && r && l > layoutP + 8) {
@@ -410,9 +415,9 @@ void plex_link_subtitles_to_graph(AVFilterGraph* g)
                     if (ist->file_index == assCtx->file_index &&
                         ist->st->index == assCtx->stream_index &&
                         ist->sub2video.sub_queue) {
-                        while (av_fifo_size(ist->sub2video.sub_queue)) {
+                        while (av_fifo_can_read(ist->sub2video.sub_queue)) {
                             AVSubtitle tmp;
-                            av_fifo_generic_read(ist->sub2video.sub_queue, &tmp, sizeof(tmp), NULL);
+                            av_fifo_read(ist->sub2video.sub_queue, &tmp, 1);
                             plex_process_subtitles(ist, &tmp);
                             avsubtitle_free(&tmp);
                         }

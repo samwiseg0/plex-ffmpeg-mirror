@@ -18,16 +18,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include "avassert.h"
 #include "avstring.h"
 #include "bprint.h"
-#include "common.h"
 #include "compat/va_copy.h"
 #include "error.h"
+#include "macros.h"
 #include "mem.h"
 
 #define av_bprint_room(buf) ((buf)->size - FFMIN((buf)->len, (buf)->size))
@@ -245,10 +245,8 @@ int av_bprint_finalize(AVBPrint *buf, char **ret_str)
                 str = buf->str;
             buf->str = NULL;
         } else {
-            str = av_malloc(real_size);
-            if (str)
-                memcpy(str, buf->str, real_size);
-            else
+            str = av_memdup(buf->str, real_size);
+            if (!str)
                 ret = AVERROR(ENOMEM);
         }
         *ret_str = str;
@@ -271,6 +269,47 @@ void av_bprint_escape(AVBPrint *dstbuf, const char *src, const char *special_cha
         mode = AV_ESCAPE_MODE_BACKSLASH; /* TODO: implement a heuristic */
 
     switch (mode) {
+    case AV_ESCAPE_MODE_QUOTE:
+        /* enclose the string between '' */
+        av_bprint_chars(dstbuf, '\'', 1);
+        for (; *src; src++) {
+            if (*src == '\'')
+                av_bprintf(dstbuf, "'\\''");
+            else
+                av_bprint_chars(dstbuf, *src, 1);
+        }
+        av_bprint_chars(dstbuf, '\'', 1);
+        break;
+
+    case AV_ESCAPE_MODE_XML:
+        /* escape XML non-markup character data as per 2.4 by default: */
+        /*  [^<&]* - ([^<&]* ']]>' [^<&]*) */
+
+        /* additionally, given one of the AV_ESCAPE_FLAG_XML_* flags, */
+        /* escape those specific characters as required. */
+        for (; *src; src++) {
+            switch (*src) {
+            case '&' : av_bprintf(dstbuf, "%s", "&amp;");  break;
+            case '<' : av_bprintf(dstbuf, "%s", "&lt;");   break;
+            case '>' : av_bprintf(dstbuf, "%s", "&gt;");   break;
+            case '\'':
+                if (!(flags & AV_ESCAPE_FLAG_XML_SINGLE_QUOTES))
+                    goto XML_DEFAULT_HANDLING;
+
+                av_bprintf(dstbuf, "%s", "&apos;");
+                break;
+            case '"' :
+                if (!(flags & AV_ESCAPE_FLAG_XML_DOUBLE_QUOTES))
+                    goto XML_DEFAULT_HANDLING;
+
+                av_bprintf(dstbuf, "%s", "&quot;");
+                break;
+XML_DEFAULT_HANDLING:
+            default: av_bprint_chars(dstbuf, *src, 1);
+            }
+        }
+        break;
+
     /* case AV_ESCAPE_MODE_BACKSLASH or unknown mode */
     case AV_ESCAPE_MODE_BACKSLASH:
     default:
@@ -288,61 +327,6 @@ void av_bprint_escape(AVBPrint *dstbuf, const char *src, const char *special_cha
                  (is_special || (is_ws && is_first_last))))
                 av_bprint_chars(dstbuf, '\\', 1);
             av_bprint_chars(dstbuf, *src, 1);
-        }
-        break;
-
-    case AV_ESCAPE_MODE_QUOTE:
-        /* enclose the string between '' */
-        av_bprint_chars(dstbuf, '\'', 1);
-        for (; *src; src++) {
-            if (*src == '\'')
-                av_bprintf(dstbuf, "'\\''");
-            else
-                av_bprint_chars(dstbuf, *src, 1);
-        }
-        av_bprint_chars(dstbuf, '\'', 1);
-        break;
-
-    case AV_ESCAPE_MODE_XML:
-        /* &;-escape characters */
-        while (*src) {
-            uint8_t tmp;
-            uint32_t cp;
-            const char *src1 = src;
-            GET_UTF8(cp, (uint8_t)*src++, goto err;);
-
-            if ((cp < 0xFF &&
-                 ((special_chars && strchr(special_chars, cp)) ||
-                  (flags & AV_ESCAPE_FLAG_WHITESPACE) && strchr(WHITESPACES, cp))) ||
-                (!(flags & AV_ESCAPE_FLAG_STRICT) &&
-                 (cp == '&' || cp == '<' || cp == '>')) ||
-                ((flags & AV_ESCAPE_FLAG_ESCAPE_SINGLE_QUOTE) && cp == '\'') ||
-                ((flags & AV_ESCAPE_FLAG_ESCAPE_DOUBLE_QUOTE) && cp == '"') ||
-                ((flags & AV_ESCAPE_FLAG_NON_ASCII) && (cp < 0x20 || cp > 0x7e))) {
-                switch (cp) {
-                case '&' : av_bprintf(dstbuf, "&amp;");  break;
-                case '<' : av_bprintf(dstbuf, "&lt;");   break;
-                case '>' : av_bprintf(dstbuf, "&gt;");   break;
-                case '"' : av_bprintf(dstbuf, "&quot;"); break;
-                case '\'': av_bprintf(dstbuf, "&apos;"); break;
-                default:   av_bprintf(dstbuf, "&#x%"PRIx32";", cp); break;
-                }
-            } else {
-                PUT_UTF8(cp, tmp, av_bprint_chars(dstbuf, tmp, 1);)
-            }
-            continue;
-        err:
-            if (flags & AV_ESCAPE_FLAG_REPLACE_INVALID_ASCII) {
-                av_bprint_chars(dstbuf, '?', 1);
-            } else if (flags & AV_ESCAPE_FLAG_REPLACE_INVALID_SEQUENCES) {
-                if (flags & AV_ESCAPE_FLAG_NON_ASCII)
-                    av_bprintf(dstbuf, "\xEF\xBF\xBD");
-                else
-                    av_bprintf(dstbuf, "&#xfffd;");
-            } else {
-                while (src1 < src)
-                    av_bprint_chars(dstbuf, *src1++, 1);
-            }
         }
         break;
 

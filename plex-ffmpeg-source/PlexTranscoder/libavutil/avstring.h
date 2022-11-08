@@ -324,7 +324,7 @@ enum AVEscapeMode {
     AV_ESCAPE_MODE_AUTO,      ///< Use auto-selected escaping mode.
     AV_ESCAPE_MODE_BACKSLASH, ///< Use backslash escaping.
     AV_ESCAPE_MODE_QUOTE,     ///< Use single-quote escaping.
-    AV_ESCAPE_MODE_XML,       ///< Use XML ampersand-escaping; requires UTF-8 input.
+    AV_ESCAPE_MODE_XML,       ///< Use XML non-markup character data escaping.
     AV_ESCAPE_MODE_URL,       ///< Use URL percent-escaping
 };
 
@@ -346,6 +346,7 @@ enum AVEscapeMode {
 #define AV_ESCAPE_FLAG_STRICT (1 << 1)
 
 /**
+<<<<<<< HEAD
  * In addition to the provided list, escape all characters outside the range of
  * U+0020 to U+007E.
  * This only applies to XML-escaping.
@@ -373,6 +374,22 @@ enum AVEscapeMode {
 #define AV_ESCAPE_FLAG_REPLACE_INVALID_ASCII (1 << 6)
 
 /**
+||||||| 2021dbe1d6f
+=======
+ * Within AV_ESCAPE_MODE_XML, additionally escape single quotes for single
+ * quoted attributes.
+ */
+#define AV_ESCAPE_FLAG_XML_SINGLE_QUOTES (1 << 2)
+
+/**
+ * Within AV_ESCAPE_MODE_XML, additionally escape double quotes for double
+ * quoted attributes.
+ */
+#define AV_ESCAPE_FLAG_XML_DOUBLE_QUOTES (1 << 3)
+
+
+/**
+>>>>>>> ffmpeg/master
  * Escape string in src, and put the escaped string in an allocated
  * string in *dst, which must be freed with av_free().
  *

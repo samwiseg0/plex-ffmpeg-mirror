@@ -268,7 +268,7 @@ static int kmsgrab_read_packet(AVFormatContext *avctx, AVPacket *pkt)
     int64_t now;
     int err;
 
-    now = av_gettime();
+    now = av_gettime_relative();
     if (ctx->frame_last) {
         int64_t delay;
         while (1) {
@@ -276,10 +276,11 @@ static int kmsgrab_read_packet(AVFormatContext *avctx, AVPacket *pkt)
             if (delay <= 0)
                 break;
             av_usleep(delay);
-            now = av_gettime();
+            now = av_gettime_relative();
         }
     }
     ctx->frame_last = now;
+    now = av_gettime();
 
     plane = drmModeGetPlane(ctx->hwctx->fd, ctx->plane_id);
     if (!plane) {
@@ -707,7 +708,7 @@ static const AVClass kmsgrab_class = {
     .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT,
 };
 
-AVInputFormat ff_kmsgrab_demuxer = {
+const AVInputFormat ff_kmsgrab_demuxer = {
     .name           = "kmsgrab",
     .long_name      = NULL_IF_CONFIG_SMALL("KMS screen capture"),
     .priv_data_size = sizeof(KMSGrabContext),

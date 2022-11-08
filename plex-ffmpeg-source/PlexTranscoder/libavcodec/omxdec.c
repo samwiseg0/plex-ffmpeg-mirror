@@ -24,6 +24,7 @@
 
 #include "libavutil/avassert.h"
 
+#include "codec_internal.h"
 #include "decode.h"
 
 #include "omx_common.h"
@@ -663,15 +664,15 @@ static const AVClass omx_##namev##dec_class = { \
     .option     = options, \
     .version    = LIBAVUTIL_VERSION_INT, \
 }; \
-AVCodec ff_##namev##_omx_decoder = { \
-    .name             = #namev "_omx", \
-    .long_name        = NULL_IF_CONFIG_SMALL("OpenMAX IL " longname " video decoder"), \
-    .type             = AVMEDIA_TYPE_VIDEO, \
-    .id               = idv, \
+const FFCodec ff_##namev##_omx_decoder = { \
+    .p.name           = #namev "_omx", \
+    .p.long_name      = NULL_IF_CONFIG_SMALL("OpenMAX IL " longname " video decoder"), \
+    .p.type           = AVMEDIA_TYPE_VIDEO, \
+    .p.id             = idv, \
     .priv_data_size   = sizeof(OMXCodecContext), \
-    .capabilities     = AV_CODEC_CAP_DELAY, \
+    .p.capabilities   = AV_CODEC_CAP_DELAY, \
     .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_SETS_PKT_DTS, \
-    .priv_class       = &omx_##namev##dec_class, \
+    .p.priv_class     = &omx_##namev##dec_class, \
     .init             = omx_decode_init, \
     .receive_frame    = omx_decode_receive_frame, \
     .close            = omx_decode_end, \

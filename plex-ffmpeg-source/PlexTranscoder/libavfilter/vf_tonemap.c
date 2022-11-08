@@ -663,7 +663,7 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
     td.desc  = desc;
     td.odesc = odesc;
     td.peak  = peak;
-    ctx->internal->execute(ctx, filter_slice, &td, NULL, FFMIN(outlink->h >> FFMAX(desc->log2_chroma_h, odesc->log2_chroma_h), ctx->graph->nb_threads));
+    ff_filter_execute(ctx, filter_slice, &td, NULL, FFMIN(outlink->h >> FFMAX(desc->log2_chroma_h, odesc->log2_chroma_h), ctx->graph->nb_threads));
 
     av_frame_free(&in);
 
@@ -711,7 +711,6 @@ static const AVFilterPad tonemap_inputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .filter_frame = filter_frame,
     },
-    { NULL }
 };
 
 static const AVFilterPad tonemap_outputs[] = {
@@ -719,18 +718,17 @@ static const AVFilterPad tonemap_outputs[] = {
         .name         = "default",
         .type         = AVMEDIA_TYPE_VIDEO,
     },
-    { NULL }
 };
 
-AVFilter ff_vf_tonemap = {
+const AVFilter ff_vf_tonemap = {
     .name            = "tonemap",
     .description     = NULL_IF_CONFIG_SMALL("Conversion to/from different dynamic ranges."),
     .init            = init,
     .uninit          = uninit,
-    .query_formats   = query_formats,
     .priv_size       = sizeof(TonemapContext),
     .priv_class      = &tonemap_class,
-    .inputs          = tonemap_inputs,
-    .outputs         = tonemap_outputs,
+    FILTER_INPUTS(tonemap_inputs),
+    FILTER_OUTPUTS(tonemap_outputs),
+    FILTER_QUERY_FUNC(query_formats),
     .flags           = AVFILTER_FLAG_SLICE_THREADS,
 };

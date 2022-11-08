@@ -123,7 +123,7 @@ int av_log_get_level_plex(void);
 void av_log_set_level_plex(int);
 
 void plex_report_stream(const AVStream *st);
-void plex_report_stream_detail(const AVStream *st);
+void plex_report_stream_detail(AVStream *st);
 
 int plex_opt_subtitle_stream(void *optctx, const char *opt, const char *arg);
 

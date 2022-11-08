@@ -20,6 +20,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "config_components.h"
+
 #include "libavutil/channel_layout.h"
 #include "libavutil/common.h"
 #include "parser.h"
@@ -43,7 +45,7 @@ int ff_aac_ac3_parse(AVCodecParserContext *s1,
         if (s1->flags & PARSER_FLAG_ONCE || (!avctx->codec &&
                 ((avctx->codec_id == AV_CODEC_ID_AAC) ?
                  avctx->profile == FF_PROFILE_UNKNOWN :
-                 avctx->channel_layout == 0))) {
+                 avctx->ch_layout.nb_channels == 0))) {
             got_frame = 1;
             i = buf_size;
             goto skip_sync;
@@ -108,9 +110,20 @@ skip_sync:
     if (got_frame) {
         if (avctx->codec_id != AV_CODEC_ID_AAC) {
             avctx->sample_rate = s->sample_rate;
-            if (avctx->codec_id != AV_CODEC_ID_EAC3) {
-                avctx->channels = s->channels;
+            if (!CONFIG_EAC3_DECODER || avctx->codec_id != AV_CODEC_ID_EAC3) {
+                av_channel_layout_uninit(&avctx->ch_layout);
+                if (s->channel_layout) {
+                    av_channel_layout_from_mask(&avctx->ch_layout, s->channel_layout);
+                } else {
+                    avctx->ch_layout.order       = AV_CHANNEL_ORDER_UNSPEC;
+                    avctx->ch_layout.nb_channels = s->channels;
+                }
+#if FF_API_OLD_CHANNEL_LAYOUT
+FF_DISABLE_DEPRECATION_WARNINGS
+                avctx->channels = avctx->ch_layout.nb_channels;
                 avctx->channel_layout = s->channel_layout;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
             }
             s1->duration = s->samples;
             avctx->audio_service_type = s->service_type;

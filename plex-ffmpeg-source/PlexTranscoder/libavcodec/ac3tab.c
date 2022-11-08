@@ -25,9 +25,8 @@
  */
 
 #include "libavutil/channel_layout.h"
-#include "libavutil/mem_internal.h"
 
-#include "avcodec.h"
+#include "ac3.h"
 #include "ac3tab.h"
 
 /**
@@ -81,38 +80,6 @@ const uint16_t ff_ac3_frame_size_tab[38][3] = {
  */
 const uint8_t ff_ac3_channels_tab[8] = {
     2, 1, 2, 3, 3, 4, 4, 5
-};
-
-/**
- * Map audio coding mode (acmod) to channel layout mask.
- */
-const uint16_t avpriv_ac3_channel_layout_tab[8] = {
-    AV_CH_LAYOUT_STEREO,
-    AV_CH_LAYOUT_MONO,
-    AV_CH_LAYOUT_STEREO,
-    AV_CH_LAYOUT_SURROUND,
-    AV_CH_LAYOUT_2_1,
-    AV_CH_LAYOUT_4POINT0,
-    AV_CH_LAYOUT_2_2,
-    AV_CH_LAYOUT_5POINT0
-};
-
-#define COMMON_CHANNEL_MAP \
-    { { 0, 1,          }, { 0, 1, 2,         } },\
-    { { 0,             }, { 0, 1,            } },\
-    { { 0, 1,          }, { 0, 1, 2,         } },\
-    { { 0, 2, 1,       }, { 0, 2, 1, 3,      } },\
-    { { 0, 1, 2,       }, { 0, 1, 3, 2,      } },\
-    { { 0, 2, 1, 3,    }, { 0, 2, 1, 4, 3,   } },
-
-/**
- * Table to remap channels from SMPTE order to AC-3 order.
- * [channel_mode][lfe][ch]
- */
-const uint8_t ff_ac3_enc_channel_map[8][2][6] = {
-    COMMON_CHANNEL_MAP
-    { { 0, 1, 2, 3,    }, { 0, 1, 3, 4, 2,   } },
-    { { 0, 2, 1, 3, 4, }, { 0, 2, 1, 4, 5, 3 } },
 };
 
 /**
@@ -263,19 +230,6 @@ const uint16_t ff_ac3_fast_gain_tab[8]= {
     0x080, 0x100, 0x180, 0x200, 0x280, 0x300, 0x380, 0x400,
 };
 
-/**
- * Default channel map for a dependent substream defined by acmod
- */
-const uint16_t ff_eac3_default_chmap[8] = {
-    AC3_CHMAP_L |               AC3_CHMAP_R, // FIXME Ch1+Ch2
-                  AC3_CHMAP_C,
-    AC3_CHMAP_L |               AC3_CHMAP_R,
-    AC3_CHMAP_L | AC3_CHMAP_C | AC3_CHMAP_R,
-    AC3_CHMAP_L |               AC3_CHMAP_R |                   AC3_CHMAP_C_SUR,
-    AC3_CHMAP_L | AC3_CHMAP_C | AC3_CHMAP_R |                   AC3_CHMAP_C_SUR,
-    AC3_CHMAP_L |               AC3_CHMAP_R | AC3_CHMAP_L_SUR |                  AC3_CHMAP_R_SUR,
-    AC3_CHMAP_L | AC3_CHMAP_C | AC3_CHMAP_R | AC3_CHMAP_L_SUR |                  AC3_CHMAP_R_SUR
-};
 const uint64_t ff_eac3_custom_channel_map_locations[16][2] = {
     { 1, AV_CH_FRONT_LEFT },
     { 1, AV_CH_FRONT_CENTER },

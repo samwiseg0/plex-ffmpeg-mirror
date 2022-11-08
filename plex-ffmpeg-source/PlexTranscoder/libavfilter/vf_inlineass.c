@@ -65,6 +65,7 @@ typedef struct {
     float vs2rgb[3][4];
 
     AVCodecContext *atsc_dec;
+    AVPacket *a53_cc_pkt;
 } AssContext;
 
 #define OFFSET(x) offsetof(AssContext, x)
@@ -129,7 +130,7 @@ static av_cold int init(AVFilterContext *ctx)
     if (ass->atsc_cc) {
         AVDictionary *options = NULL;
         int ret;
-        AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_EIA_608);
+        const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_EIA_608);
         if (!codec) {
             av_log(ctx, AV_LOG_ERROR, "failed to find EIA-608 decoder\n");
             return AVERROR_DECODER_NOT_FOUND;
@@ -168,6 +169,8 @@ static av_cold void uninit(AVFilterContext *ctx)
         ass_renderer_done(ass->renderer);
     if (ass->library)
         ass_library_done(ass->library);
+    if (ass->a53_cc_pkt)
+        av_packet_free(&ass->a53_cc_pkt);
 }
 
 static int query_formats(AVFilterContext *ctx)
@@ -587,18 +590,22 @@ static int handle_atsc_cc(AVFilterLink *inlink, AVFrame *picref)
         return 0;
 
     int ret = 0;
-    AVPacket pkt = {0};
     AVSubtitle sub = {0};
     int got_output = 0;
 
-    av_init_packet(&pkt);
-    if (!(pkt.buf = av_buffer_ref(sd->buf)))
-        return AVERROR(ENOMEM);
-    pkt.data = sd->data;
-    pkt.size = sd->size;
-    pkt.pts  = picref->pts;
+    if (!ass->a53_cc_pkt)
+        ass->a53_cc_pkt = av_packet_alloc();
 
-    if (avcodec_decode_subtitle2(ass->atsc_dec, &sub, &got_output, &pkt) < 0)
+    if (!ass->a53_cc_pkt)
+        return AVERROR(ENOMEM);
+
+    if (!(ass->a53_cc_pkt->buf = av_buffer_ref(sd->buf)))
+        return AVERROR(ENOMEM);
+    ass->a53_cc_pkt->data = sd->data;
+    ass->a53_cc_pkt->size = sd->size;
+    ass->a53_cc_pkt->pts  = picref->pts;
+
+    if (avcodec_decode_subtitle2(ass->atsc_dec, &sub, &got_output, ass->a53_cc_pkt) < 0)
         goto fail;
 
     if (!got_output)
@@ -610,7 +617,7 @@ static int handle_atsc_cc(AVFilterLink *inlink, AVFrame *picref)
 
 fail:
     av_frame_remove_side_data(picref, AV_FRAME_DATA_A53_CC);
-    av_packet_unref(&pkt);
+    av_packet_unref(ass->a53_cc_pkt);
     avsubtitle_free(&sub);
     return ret;
 }
@@ -641,11 +648,10 @@ static const AVFilterPad inlineass_inputs[] = {
     {
         .name             = "default",
         .type             = AVMEDIA_TYPE_VIDEO,
+        .flags          = AVFILTERPAD_FLAG_NEEDS_WRITABLE,
         .filter_frame     = filter_frame,
         .config_props     = config_input,
-        .needs_writable   = 1,
     },
-    { NULL }
 };
 
 static const AVFilterPad inlineass_outputs[] = {
@@ -653,7 +659,6 @@ static const AVFilterPad inlineass_outputs[] = {
         .name = "default",
         .type = AVMEDIA_TYPE_VIDEO,
     },
-    { NULL }
 };
 
 void avfilter_inlineass_set_storage_size(AVFilterContext *context, int w, int h)
@@ -678,7 +683,8 @@ void avfilter_inlineass_add_attachment(AVFilterContext *context, AVStream *st)
         st->codecpar->codec_id == AV_CODEC_ID_OTF ||
         !av_strcasecmp( ext, ".ttf" ) ||
         !av_strcasecmp( ext, ".otf" ) ||
-        !av_strcasecmp( ext, ".ttc" )
+        !av_strcasecmp( ext, ".ttc" ) ||
+        !av_strcasecmp( ext, ".otc" )
     ) {
         ass_add_font(assContext->library, filename,
                      st->codecpar->extradata, st->codecpar->extradata_size);
@@ -844,14 +850,14 @@ static const AVOption inlineass_options[] = {
 
 AVFILTER_DEFINE_CLASS(inlineass);
 
-AVFilter ff_vf_inlineass ={
+const AVFilter ff_vf_inlineass ={
     .name          = "inlineass",
     .description   = NULL_IF_CONFIG_SMALL("Render subtitles onto input video using the libass library."),
     .priv_size     = sizeof(AssContext),
     .priv_class    = &inlineass_class,
     .init          = init,
     .uninit        = uninit,
-    .query_formats = query_formats,
-    .inputs        = inlineass_inputs,
-    .outputs       = inlineass_outputs,
+    FILTER_INPUTS(inlineass_inputs),
+    FILTER_OUTPUTS(inlineass_outputs),
+    FILTER_QUERY_FUNC(query_formats),
   };

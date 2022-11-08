@@ -46,7 +46,7 @@ fate-auravision-v2: CMD = framecrc -i $(TARGET_SAMPLES)/auravision/salma-hayek-i
 FATE_VIDEO-$(call DEMDEC, AVI, AVRN) += fate-avid-interlaced
 fate-avid-interlaced: CMD = framecrc -i $(TARGET_SAMPLES)/avid/avid_ntsc_interlaced.avi
 
-FATE_VIDEO-$(call DEMDEC, MOV, AVRN) += fate-avid-meridian
+FATE_VIDEO-$(call DEMDEC, MOV, MJPEG) += fate-avid-meridian
 fate-avid-meridian: CMD = framecrc -i $(TARGET_SAMPLES)/avid/avidmeridianntsc.mov
 
 FATE_VIDEO-$(call DEMDEC, BETHSOFTVID, BETHSOFTVID) += fate-bethsoft-vid
@@ -207,6 +207,9 @@ fate-kgv1: CMD = framecrc -i $(TARGET_SAMPLES)/kega/kgv1.avi -pix_fmt rgb555le -
 FATE_VIDEO-$(call DEMDEC, AVI, KMVC) += fate-kmvc
 fate-kmvc: CMD = framecrc -i $(TARGET_SAMPLES)/KMVC/LOGO1.AVI -an -t 3 -pix_fmt rgb24 -vf scale
 
+FATE_VIDEO-$(call DEMDEC, AVI, LSCR) += fate-lscr
+fate-lscr: CMD = framecrc -i $(TARGET_SAMPLES)/lscr/lscr_compr9_short.avi
+
 FATE_MAGICYUV += fate-magicyuv-y4444i \
                  fate-magicyuv-y400i  \
                  fate-magicyuv-y420   \
@@ -247,9 +250,6 @@ fate-motionpixels: CMD = framecrc -i $(TARGET_SAMPLES)/motion-pixels/INTRO-parti
 FATE_VIDEO-$(call DEMDEC, MPEGTS, MPEG2VIDEO) += fate-mpeg2-field-enc fate-mpeg2-ticket186
 fate-mpeg2-field-enc: CMD = framecrc -flags +bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -an -frames:v 30
 fate-mpeg2-ticket186: CMD = framecrc -flags +bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/t.mpg -an
-
-FATE_VIDEO-$(call DEMDEC, MPEGPS, MPEG2VIDEO) += fate-mpeg2-ticket6024
-fate-mpeg2-ticket6024: CMD = framecrc -flags +bitexact -idct simple -flags +truncated -i $(TARGET_SAMPLES)/mpeg2/matrixbench_mpeg2.lq1.mpg -an
 
 FATE_VIDEO-$(call DEMDEC, MPEGVIDEO, MPEG2VIDEO) += fate-mpeg2-ticket6677
 fate-mpeg2-ticket6677: CMD = framecrc -flags +bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/sony-ct3.bs

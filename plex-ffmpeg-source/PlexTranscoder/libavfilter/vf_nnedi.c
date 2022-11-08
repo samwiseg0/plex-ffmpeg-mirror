@@ -66,11 +66,9 @@ typedef struct NNEDIContext {
 
     char *weights_file;
 
-    AVFrame *src;
-    AVFrame *second;
-    AVFrame *dst;
+    AVFrame *prev;
     int eof;
-    int64_t cur_pts;
+    int64_t pts;
 
     AVFloatDSPContext *fdsp;
     int depth;
@@ -169,8 +167,7 @@ static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
 
-    outlink->time_base.num = ctx->inputs[0]->time_base.num;
-    outlink->time_base.den = ctx->inputs[0]->time_base.den * 2;
+    outlink->time_base     = av_mul_q(ctx->inputs[0]->time_base, (AVRational){1, 2});
     outlink->w             = ctx->inputs[0]->w;
     outlink->h             = ctx->inputs[0]->h;
 
@@ -180,48 +177,42 @@ static int config_output(AVFilterLink *outlink)
     return 0;
 }
 
-static int query_formats(AVFilterContext *ctx)
-{
-    static const enum AVPixelFormat pix_fmts[] = {
-        AV_PIX_FMT_GRAY8,
-        AV_PIX_FMT_GRAY9, AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12, AV_PIX_FMT_GRAY14, AV_PIX_FMT_GRAY16,
-        AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
-        AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
-        AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
-        AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P,
-        AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ420P,
-        AV_PIX_FMT_YUVJ411P,
-        AV_PIX_FMT_YUVA420P, AV_PIX_FMT_YUVA422P, AV_PIX_FMT_YUVA444P,
-        AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRAP,
-        AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
-        AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
-        AV_PIX_FMT_YUV440P10,
-        AV_PIX_FMT_YUV420P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV444P12,
-        AV_PIX_FMT_YUV440P12,
-        AV_PIX_FMT_YUV420P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV444P14,
-        AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
-        AV_PIX_FMT_GBRP9, AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12, AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRP16,
-        AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
-        AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
-        AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
-        AV_PIX_FMT_GBRAP10,   AV_PIX_FMT_GBRAP12,    AV_PIX_FMT_GBRAP16,
-        AV_PIX_FMT_NONE
-    };
-
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
-        return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
-}
+static const enum AVPixelFormat pix_fmts[] = {
+    AV_PIX_FMT_GRAY8,
+    AV_PIX_FMT_GRAY9, AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12, AV_PIX_FMT_GRAY14, AV_PIX_FMT_GRAY16,
+    AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
+    AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
+    AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
+    AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P,
+    AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ420P,
+    AV_PIX_FMT_YUVJ411P,
+    AV_PIX_FMT_YUVA420P, AV_PIX_FMT_YUVA422P, AV_PIX_FMT_YUVA444P,
+    AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRAP,
+    AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
+    AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
+    AV_PIX_FMT_YUV440P10,
+    AV_PIX_FMT_YUV420P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV444P12,
+    AV_PIX_FMT_YUV440P12,
+    AV_PIX_FMT_YUV420P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV444P14,
+    AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
+    AV_PIX_FMT_GBRP9, AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12, AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRP16,
+    AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
+    AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
+    AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
+    AV_PIX_FMT_GBRAP10,   AV_PIX_FMT_GBRAP12,    AV_PIX_FMT_GBRAP16,
+    AV_PIX_FMT_NONE
+};
 
 static float dot_dsp(const NNEDIContext *const s, const float *kernel, const float *input,
                      int n, float scale, float bias)
 {
-    float sum;
+    float sum, y;
 
     sum = s->fdsp->scalarproduct_float(kernel, input, n);
 
-    return sum * scale + bias;
+    y = sum * scale + bias + 1e-20f;
+
+    return y;
 }
 
 static float elliott(float x)
@@ -334,6 +325,7 @@ static void gather_input(const float *src, ptrdiff_t src_stride,
                          float *buf, float mstd[4],
                          const PredictorCoefficients *const model)
 {
+    const float scale = 1.f / model->nsize;
     float sum = 0.f;
     float sum_sq = 0.f;
     float tmp;
@@ -352,10 +344,10 @@ static void gather_input(const float *src, ptrdiff_t src_stride,
         buf += model->xdim;
     }
 
-    mstd[0] = sum / model->nsize;
+    mstd[0] = sum * scale;
     mstd[3] = 0.f;
 
-    tmp = sum_sq / model->nsize - mstd[0] * mstd[0];
+    tmp = sum_sq * scale - mstd[0] * mstd[0];
     if (tmp < FLT_EPSILON) {
         mstd[1] = 0.0f;
         mstd[2] = 0.0f;
@@ -541,8 +533,8 @@ static void interpolation(const void *src, ptrdiff_t src_stride,
 static int filter_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
 {
     const NNEDIContext *const s = ctx->priv;
-    AVFrame *out = s->dst;
-    AVFrame *in = s->src;
+    AVFrame *out = arg;
+    AVFrame *in = s->prev;
     const float in_scale = s->in_scale;
     const float out_scale = s->out_scale;
     const int depth = s->depth;
@@ -635,7 +627,7 @@ static int filter_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
                 width, 1, in_scale);
 
         for (int y = 0; y < slice_end - slice_start; y += 2) {
-            if (s->prescreen > 0)
+            if (s->pscrn > 0)
                 s->prescreen[s->pscrn > 1](ctx, srcbuf + (y / 2) * srcbuf_stride + 32,
                              srcbuf_stride, prescreen_buf, width,
                              &s->prescreener[s->pscrn - 1]);
@@ -647,7 +639,7 @@ static int filter_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
                       prescreen_buf, width,
                       &s->coeffs[s->etype][s->nnsparam][s->nsize], s->qual == 2);
 
-            if (s->prescreen > 0)
+            if (s->pscrn > 0)
                 interpolation(srcbuf + (y / 2) * srcbuf_stride + 32,
                               srcbuf_stride,
                               dstbuf + (y / 2) * dstbuf_stride,
@@ -665,105 +657,55 @@ static int get_frame(AVFilterContext *ctx, int is_second)
 {
     NNEDIContext *s = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
-    AVFrame *src = s->src;
+    AVFrame *dst;
 
-    s->dst = ff_get_video_buffer(outlink, outlink->w, outlink->h);
-    if (!s->dst)
+    dst = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+    if (!dst)
         return AVERROR(ENOMEM);
-    av_frame_copy_props(s->dst, src);
-    s->dst->interlaced_frame = 0;
+    av_frame_copy_props(dst, s->prev);
+    dst->interlaced_frame = 0;
+    dst->pts = s->pts;
 
-    ctx->internal->execute(ctx, filter_slice, NULL, NULL, FFMIN(s->planeheight[1] / 2, s->nb_threads));
+    ff_filter_execute(ctx, filter_slice, dst, NULL,
+                      FFMIN(s->planeheight[1] / 2, s->nb_threads));
 
     if (s->field == -2 || s->field > 1)
         s->field_n = !s->field_n;
 
-    return 0;
+    return ff_filter_frame(outlink, dst);
 }
 
-static int filter_frame(AVFilterLink *inlink, AVFrame *src)
+static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
-    AVFilterLink *outlink = ctx->outputs[0];
     NNEDIContext *s = ctx->priv;
     int ret;
 
-    if ((s->field > 1 ||
-         s->field == -2) && !s->second) {
-        goto second;
-    } else if (s->field > 1 ||
-               s->field == -2) {
-        AVFrame *dst;
-
-        s->src = s->second;
-        ret = get_frame(ctx, 1);
-        if (ret < 0) {
-            av_frame_free(&s->dst);
-            av_frame_free(&s->second);
-            s->src = NULL;
-            return ret;
-        }
-        dst = s->dst;
-
-        if (src->pts != AV_NOPTS_VALUE &&
-            dst->pts != AV_NOPTS_VALUE)
-            dst->pts += src->pts;
-        else
-            dst->pts = AV_NOPTS_VALUE;
-
-        ret = ff_filter_frame(outlink, dst);
-        if (ret < 0)
-            return ret;
-        if (s->eof)
-            return 0;
-        s->cur_pts = s->second->pts;
-        av_frame_free(&s->second);
-second:
-        if ((s->deint && src->interlaced_frame &&
-             !ctx->is_disabled) ||
-            (!s->deint && !ctx->is_disabled)) {
-            s->second = src;
-        }
+    if (!s->prev) {
+        s->prev = in;
+        return 0;
     }
 
-    if ((s->deint && !src->interlaced_frame) || ctx->is_disabled) {
-        AVFrame *dst = av_frame_clone(src);
-        if (!dst) {
-            av_frame_free(&src);
-            av_frame_free(&s->second);
-            return AVERROR(ENOMEM);
-        }
-
-        if (s->field > 1 || s->field == -2) {
-            av_frame_free(&s->second);
-            if ((s->deint && src->interlaced_frame) ||
-                (!s->deint))
-                s->second = src;
-        } else {
-            av_frame_free(&src);
-        }
-        if (dst->pts != AV_NOPTS_VALUE)
-            dst->pts *= 2;
-        return ff_filter_frame(outlink, dst);
-    }
-
-    s->src = src;
-    ret = get_frame(ctx, 0);
-    if (ret < 0) {
-        av_frame_free(&s->dst);
-        av_frame_free(&s->src);
-        av_frame_free(&s->second);
+    if ((s->deint && !s->prev->interlaced_frame) || ctx->is_disabled) {
+        s->prev->pts *= 2;
+        ret = ff_filter_frame(ctx->outputs[0], s->prev);
+        s->prev = in;
         return ret;
     }
 
-    if (src->pts != AV_NOPTS_VALUE)
-        s->dst->pts = src->pts * 2;
-    if (s->field <= 1 && s->field > -2) {
-        av_frame_free(&src);
-        s->src = NULL;
+    s->pts = s->prev->pts * 2;
+    ret = get_frame(ctx, 0);
+    if (ret < 0 || (s->field > -2 && s->field < 2)) {
+        av_frame_free(&s->prev);
+        s->prev = in;
+        return ret;
     }
 
-    return ff_filter_frame(outlink, s->dst);
+    s->pts = s->prev->pts + in->pts;
+    ret = get_frame(ctx, 1);
+    av_frame_free(&s->prev);
+    s->prev = in;
+    return ret;
 }
 
 static int request_frame(AVFilterLink *link)
@@ -777,21 +719,22 @@ static int request_frame(AVFilterLink *link)
 
     ret  = ff_request_frame(ctx->inputs[0]);
 
-    if (ret == AVERROR_EOF && s->second) {
-        AVFrame *next = av_frame_clone(s->second);
+    if (ret == AVERROR_EOF && s->prev) {
+        AVFrame *next = av_frame_clone(s->prev);
 
         if (!next)
             return AVERROR(ENOMEM);
 
-        next->pts = s->second->pts * 2 - s->cur_pts;
+        next->pts = s->prev->pts + av_rescale_q(1, av_inv_q(ctx->outputs[0]->frame_rate),
+                                                ctx->outputs[0]->time_base);
         s->eof = 1;
 
-        filter_frame(ctx->inputs[0], next);
+        ret = filter_frame(ctx->inputs[0], next);
     } else if (ret < 0) {
         return ret;
     }
 
-    return 0;
+    return ret;
 }
 
 static void copy_weights(float *dst, int n, const float **data)
@@ -945,12 +888,13 @@ static void subtract_mean_new(PrescreenerCoefficients *coeffs, float half)
 
 static void subtract_mean_predictor(PredictorCoefficients *model)
 {
-    int filter_size = model->nsize;
-    int nns = model->nns;
+    const int filter_size = model->nsize;
+    const int nns = model->nns;
+    const float scale = 1.f / nns;
 
     double softmax_means[256]; // Average of individual softmax filters.
     double elliott_means[256]; // Average of individual elliott filters.
-    double mean_filter[48 * 6]; // Pointwise average of all softmax filters.
+    double mean_filter[48 * 6] = { 0 }; // Pointwise average of all softmax filters.
     double mean_bias;
 
     // Quality 1.
@@ -963,7 +907,7 @@ static void subtract_mean_predictor(PredictorCoefficients *model)
     }
 
     for (int k = 0; k < filter_size; k++)
-        mean_filter[k] /= nns;
+        mean_filter[k] *= scale;
 
     mean_bias = mean(model->softmax_bias_q1, nns);
 
@@ -988,7 +932,7 @@ static void subtract_mean_predictor(PredictorCoefficients *model)
     }
 
     for (int k = 0; k < filter_size; k++)
-        mean_filter[k] /= nns;
+        mean_filter[k] *= scale;
 
     mean_bias = mean(model->softmax_bias_q2, nns);
 
@@ -1182,7 +1126,7 @@ static av_cold void uninit(AVFilterContext *ctx)
         }
     }
 
-    av_frame_free(&s->second);
+    av_frame_free(&s->prev);
 }
 
 static const AVFilterPad inputs[] = {
@@ -1192,7 +1136,6 @@ static const AVFilterPad inputs[] = {
         .filter_frame  = filter_frame,
         .config_props  = config_input,
     },
-    { NULL }
 };
 
 static const AVFilterPad outputs[] = {
@@ -1202,19 +1145,18 @@ static const AVFilterPad outputs[] = {
         .config_props  = config_output,
         .request_frame = request_frame,
     },
-    { NULL }
 };
 
-AVFilter ff_vf_nnedi = {
+const AVFilter ff_vf_nnedi = {
     .name          = "nnedi",
     .description   = NULL_IF_CONFIG_SMALL("Apply neural network edge directed interpolation intra-only deinterlacer."),
     .priv_size     = sizeof(NNEDIContext),
     .priv_class    = &nnedi_class,
     .init          = init,
     .uninit        = uninit,
-    .query_formats = query_formats,
-    .inputs        = inputs,
-    .outputs       = outputs,
+    FILTER_INPUTS(inputs),
+    FILTER_OUTPUTS(outputs),
+    FILTER_PIXFMTS_ARRAY(pix_fmts),
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL | AVFILTER_FLAG_SLICE_THREADS,
     .process_command = ff_filter_process_command,
 };

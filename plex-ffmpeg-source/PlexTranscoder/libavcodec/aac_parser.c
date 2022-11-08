@@ -166,7 +166,6 @@ static int decode_pce(AVCodecParserContext *s1, GetBitContext *gb)
     skip_bits_long(gb, comment_len);
 
     s->channel_layout = layout;
-    s->channels = av_get_channel_layout_nb_channels(s->channel_layout);
 
     return 0;
 }
@@ -180,7 +179,6 @@ static int set_default_channels(AVCodecParserContext *s1, int channel_config)
     s->channel_layout = aac_channel_layout[channel_config - 1];
     if (channel_config == 7)
         s->channel_layout = AV_CH_LAYOUT_7POINT1;
-    s->channels = av_get_channel_layout_nb_channels(s->channel_layout);
     return 0;
 }
 
@@ -799,8 +797,8 @@ static int aac_parse_full(AVCodecParserContext *s1, AVCodecContext *avctx,
         int len;
         if (avctx->extradata_size > INT_MAX / 8)
             return AVERROR_INVALIDDATA;
-        if ((len = avpriv_mpeg4audio_get_config(&m4ac, avctx->extradata,
-                                                avctx->extradata_size * 8, 1)) < 0)
+        if ((len = avpriv_mpeg4audio_get_config2(&m4ac, avctx->extradata,
+                                                 avctx->extradata_size, 1, s1)) < 0)
             return AVERROR_INVALIDDATA;
         if (m4ac.sampling_index > 12) {
             av_log(avctx, AV_LOG_ERROR,
@@ -878,9 +876,9 @@ static int aac_parse_full(AVCodecParserContext *s1, AVCodecContext *avctx,
 
     if (avctx->profile == FF_PROFILE_UNKNOWN)
         avctx->profile = s->profile;
-    if (!avctx->channels) {
-        avctx->channels = s->channels;
-        avctx->channel_layout = s->channel_layout;
+    if (!s->channels) {
+        s->channels = s->channels;
+        s->channel_layout = s->channel_layout;
     }
     if (!avctx->sample_rate)
         avctx->sample_rate = m4ac.sample_rate;
@@ -900,7 +898,7 @@ static av_cold int aac_parse_init(AVCodecParserContext *s1)
 }
 
 
-AVCodecParser ff_aac_parser = {
+const AVCodecParser ff_aac_parser = {
     .codec_ids      = { AV_CODEC_ID_AAC },
     .priv_data_size = sizeof(AACAC3ParseContext),
     .parser_init    = aac_parse_init,

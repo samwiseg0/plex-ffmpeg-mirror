@@ -24,6 +24,7 @@
 #include "version.h"
 
 #include "libavcodec/avcodec.h"
+#include "libavcodec/codec_internal.h"
 #include "libavcodec/internal.h"
 
 extern int ff_is_master;
@@ -31,7 +32,7 @@ extern int ff_is_master;
 static void register_component(FFLibrary *lib)
 {
 #if defined(BUILDING_EXTERNAL_DECODER) || defined(BUILDING_EXTERNAL_ENCODER)
-    extern AVCodec EXTLIBNAME;
+    extern FFCodec EXTLIBNAME;
     lib->avcodec_register(&EXTLIBNAME);
 #else
 #error "Unknown extlib type"

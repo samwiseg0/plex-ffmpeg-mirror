@@ -1,10 +1,11 @@
 tests/data/fits-multi.fits: TAG = GEN
 tests/data/fits-multi.fits: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data
-	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< \
+	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< -nostdin \
         -i $(TARGET_SAMPLES)/gif/m4nb.gif \
         -y $(TARGET_PATH)/$(@) -nostdin 2>/dev/null
 
 #mapping of fits file formats to png filenames
+# TODO: Use an actual 64bit input file and fix the gbrp16 test on big-endian
 map.tests/data/lena-gray.fits    := gray8
 map.tests/data/lena-gbrp.fits    := rgb24
 map.tests/data/lena-gbrp16.fits  := rgb48
@@ -13,7 +14,7 @@ map.tests/data/lena-gbrap16le.fits := rgba64
 tests/data/lena%.fits: TAG = GEN
 tests/data/lena%.fits: NAME = $(map.$(@))
 tests/data/lena%.fits: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data
-	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< \
+	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< -nostdin \
         -i $(TARGET_SAMPLES)/png1/lena-$(map.$(@)).png \
         -y $(TARGET_PATH)/$(@) -nostdin 2>/dev/null
 

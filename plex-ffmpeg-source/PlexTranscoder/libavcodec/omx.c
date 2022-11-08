@@ -36,8 +36,9 @@
 #include "libavutil/opt.h"
 
 #include "avcodec.h"
+#include "codec_internal.h"
 #include "h264.h"
-#include "internal.h"
+#include "pthread_internal.h"
 
 #include "omx_common.h"
 
@@ -432,41 +433,22 @@ static int omx_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
             avctx->extradata_size += buffer->nFilledLen;
             memset(avctx->extradata + avctx->extradata_size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
         } else {
-            if (!(buffer->nFlags & OMX_BUFFERFLAG_ENDOFFRAME) || !pkt->data) {
-                // If the output packet isn't preallocated, just concatenate everything in our
-                // own buffer
-                int newsize = s->output_buf_size + buffer->nFilledLen + AV_INPUT_BUFFER_PADDING_SIZE;
-                if ((ret = av_reallocp(&s->output_buf, newsize)) < 0) {
-                    s->output_buf_size = 0;
-                    goto end;
-                }
-                memcpy(s->output_buf + s->output_buf_size, buffer->pBuffer + buffer->nOffset, buffer->nFilledLen);
-                s->output_buf_size += buffer->nFilledLen;
-                if (buffer->nFlags & OMX_BUFFERFLAG_ENDOFFRAME) {
-                    if ((ret = av_packet_from_data(pkt, s->output_buf, s->output_buf_size)) < 0) {
-                        av_freep(&s->output_buf);
-                        s->output_buf_size = 0;
-                        goto end;
-                    }
-                    s->output_buf = NULL;
-                    s->output_buf_size = 0;
-                }
-#if CONFIG_OMX_RPI
-                had_partial = 1;
-#endif
-            } else {
-                // End of frame, and the caller provided a preallocated frame
-                if ((ret = ff_alloc_packet2(avctx, pkt, s->output_buf_size + buffer->nFilledLen, 0)) < 0) {
-                    av_log(avctx, AV_LOG_ERROR, "Error getting output packet of size %d.\n",
-                           (int)(s->output_buf_size + buffer->nFilledLen));
-                    goto end;
-                }
-                memcpy(pkt->data, s->output_buf, s->output_buf_size);
-                memcpy(pkt->data + s->output_buf_size, buffer->pBuffer + buffer->nOffset, buffer->nFilledLen);
-                av_freep(&s->output_buf);
+            int newsize = s->output_buf_size + buffer->nFilledLen + AV_INPUT_BUFFER_PADDING_SIZE;
+            if ((ret = av_reallocp(&s->output_buf, newsize)) < 0) {
                 s->output_buf_size = 0;
+                goto end;
             }
+            memcpy(s->output_buf + s->output_buf_size, buffer->pBuffer + buffer->nOffset, buffer->nFilledLen);
+            s->output_buf_size += buffer->nFilledLen;
             if (buffer->nFlags & OMX_BUFFERFLAG_ENDOFFRAME) {
+                memset(s->output_buf + s->output_buf_size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+                if ((ret = av_packet_from_data(pkt, s->output_buf, s->output_buf_size)) < 0) {
+                    av_freep(&s->output_buf);
+                    s->output_buf_size = 0;
+                    goto end;
+                }
+                s->output_buf = NULL;
+                s->output_buf_size = 0;
                 pkt->pts = av_rescale_q(from_omx_ticks(buffer->nTimeStamp), AV_TIME_BASE_Q, avctx->time_base);
                 // We don't currently enable B-frames for the encoders, so set
                 // pkt->dts = pkt->pts. (The calling code behaves worse if the encoder
@@ -475,6 +457,10 @@ static int omx_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                 if (buffer->nFlags & OMX_BUFFERFLAG_SYNCFRAME)
                     pkt->flags |= AV_PKT_FLAG_KEY;
                 *got_packet = 1;
+            } else {
+#if CONFIG_OMX_RPI
+                had_partial = 1;
+#endif
             }
         }
 end:
@@ -523,19 +509,19 @@ static const AVClass omx_##namev##enc_class = { \
     .option     = options, \
     .version    = LIBAVUTIL_VERSION_INT, \
 }; \
-AVCodec ff_##namev##_omx_encoder = { \
-    .name             = #namev "_omx", \
-    .long_name        = NULL_IF_CONFIG_SMALL("OpenMAX IL " longname " video encoder"), \
-    .type             = AVMEDIA_TYPE_VIDEO, \
-    .id               = idv, \
+const FFCodec ff_##namev##_omx_encoder = { \
+    .p.name           = #namev "_omx", \
+    .p.long_name      = NULL_IF_CONFIG_SMALL("OpenMAX IL " longname " video encoder"), \
+    .p.type           = AVMEDIA_TYPE_VIDEO, \
+    .p.id             = idv, \
     .priv_data_size   = sizeof(OMXCodecContext), \
     .init             = omx_encode_init, \
     .encode2          = omx_encode_frame, \
     .close            = omx_encode_end, \
-    .pix_fmts         = omx_encoder_pix_fmts, \
-    .capabilities     = AV_CODEC_CAP_DELAY, \
+    .p.pix_fmts       = omx_encoder_pix_fmts, \
+    .p.capabilities   = AV_CODEC_CAP_DELAY, \
     .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP, \
-    .priv_class       = &omx_##namev##enc_class, \
+    .p.priv_class     = &omx_##namev##enc_class, \
 };
 
 OMXENC(mpeg4, "MPEG-4", AV_CODEC_ID_MPEG4)

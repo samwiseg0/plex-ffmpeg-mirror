@@ -22,6 +22,7 @@
 
 #include "libavutil/internal.h"
 #include "avcodec.h"
+#include "codec_internal.h"
 #include "internal.h"
 
 static int decode_frame(AVCodecContext *avctx, void *data,
@@ -35,12 +36,12 @@ static av_cold int decode_init(AVCodecContext *avctx)
     return -1;
 }
 
-AVCodec ff_fake_avi_decoder = {
-    .name           = "fake_avi",
-    .long_name      = NULL_IF_CONFIG_SMALL("AVI demuxer"),
-    .type           = AVMEDIA_TYPE_VIDEO,
-    .id             = AV_CODEC_ID_MPEG4SYSTEMS,
+const FFCodec ff_fake_avi_decoder = {
+    .p.name         = "fake_avi",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("AVI demuxer"),
+    .p.type         = AVMEDIA_TYPE_VIDEO,
+    .p.id           = AV_CODEC_ID_MPEG4SYSTEMS,
     .init           = decode_init,
     .decode         = decode_frame,
-    .capabilities   = AV_CODEC_CAP_DR1,
+    .p.capabilities = AV_CODEC_CAP_DR1,
 };

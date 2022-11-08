@@ -30,9 +30,11 @@
 
 #include <stdint.h>
 
+#include "libavutil/opt.h"
 #include "ac3.h"
 #include "ac3dsp.h"
 #include "avcodec.h"
+#include "codec_internal.h"
 #include "fft.h"
 #include "mathops.h"
 #include "me_cmp.h"
@@ -42,13 +44,6 @@
 #ifndef AC3ENC_FLOAT
 #define AC3ENC_FLOAT 0
 #endif
-
-#define OFFSET(param) offsetof(AC3EncodeContext, options.param)
-#define AC3ENC_PARAM (AV_OPT_FLAG_AUDIO_PARAM | AV_OPT_FLAG_ENCODING_PARAM)
-
-#define AC3ENC_TYPE_AC3_FIXED   0
-#define AC3ENC_TYPE_AC3         1
-#define AC3ENC_TYPE_EAC3        2
 
 #if AC3ENC_FLOAT
 #include "libavutil/float_dsp.h"
@@ -271,8 +266,13 @@ typedef struct AC3EncodeContext {
     void (*output_frame_header)(struct AC3EncodeContext *s);
 } AC3EncodeContext;
 
-
+#if FF_API_OLD_CHANNEL_LAYOUT
 extern const uint64_t ff_ac3_channel_layouts[19];
+#endif
+extern const AVChannelLayout ff_ac3_ch_layouts[19];
+extern const AVOption ff_ac3_enc_options[];
+extern const AVClass ff_ac3enc_class;
+extern const FFCodecDefault ff_ac3_enc_defaults[];
 
 int ff_ac3_encode_init(AVCodecContext *avctx);
 int ff_ac3_float_encode_init(AVCodecContext *avctx);

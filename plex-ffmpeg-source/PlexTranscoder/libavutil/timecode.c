@@ -27,6 +27,7 @@
  */
 
 #include <stdio.h>
+#include "common.h"
 #include "timecode.h"
 #include "log.h"
 #include "error.h"
@@ -114,8 +115,8 @@ char *av_timecode_make_string(const AVTimecode *tc, char *buf, int framenum)
     }
     ff = framenum % fps;
     ss = framenum / fps        % 60;
-    mm = framenum / (fps*60)   % 60;
-    hh = framenum / (fps*3600);
+    mm = framenum / (fps*60LL) % 60;
+    hh = framenum / (fps*3600LL);
     if (tc->flags & AV_TIMECODE_FLAG_24HOURSMAX)
         hh = hh % 24;
     snprintf(buf, AV_TIMECODE_STR_SIZE, "%s%02d:%02d:%02d%c%02d",
@@ -252,7 +253,7 @@ int av_timecode_init_from_string(AVTimecode *tc, AVRational rate, const char *st
     char c;
     int hh, mm, ss, ff, flags;
 
-    if (sscanf(str, "%02u:%02u:%02u%c%02u", &hh, &mm, &ss, &c, &ff) != 5) {
+    if (sscanf(str, "%d:%d:%d%c%d", &hh, &mm, &ss, &c, &ff) != 5) {
         av_log(log_ctx, AV_LOG_ERROR, "Unable to parse timecode, "
                                       "syntax: hh:mm:ss[:;.]ff\n");
         return AVERROR_INVALIDDATA;

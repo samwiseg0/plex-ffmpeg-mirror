@@ -80,8 +80,6 @@ static __inline__ __device__ type##4 make_##type##4(base x, base y, base z, base
     return ret; \
 }
 
-#define MAKE_TYPE
-
 MAKE_VECTORS(uchar, unsigned char)
 MAKE_VECTORS(ushort, unsigned short)
 MAKE_VECTORS(int, int)
@@ -170,8 +168,6 @@ static __inline__ __device__ float __exp2f(float x)
     return ret;
 }
 
-#define __expf(x) (__log2f((x) * 1.4427f))
-
 static __inline__ __device__ float __log2f(float x)
 {
     float ret;
@@ -210,5 +206,6 @@ static inline __device__ double fabs(double a) { return __builtin_fabs(a); }
 
 static inline __device__ float __sinf(float a) { return __nvvm_sin_approx_f(a); }
 static inline __device__ float __cosf(float a) { return __nvvm_cos_approx_f(a); }
+static inline __device__ float __expf(float a) { return __nvvm_ex2_approx_f(a * (float)__builtin_log2(__builtin_exp(1))); }
 
 #endif /* COMPAT_CUDA_CUDA_RUNTIME_H */

@@ -29,6 +29,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/avassert.h"
 #include "avcodec.h"
+#include "codec_internal.h"
 #include "encode.h"
 #include "internal.h"
 #include "mediacodecndk.h"
@@ -343,7 +344,7 @@ static int mediacodecndk_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
                 continue;
             }
 
-            if ((ret = ff_alloc_packet2(avctx, pkt, bufferInfo.size, bufferInfo.size) < 0)) {
+            if ((ret = ff_alloc_packet(avctx, pkt, bufferInfo.size) < 0)) {
                 AMediaCodec_releaseOutputBuffer(ctx->encoder, encoderStatus, false);
                 av_log(avctx, AV_LOG_ERROR, "Failed to allocate packet: %i\n", ret);
                 return ret;
@@ -395,18 +396,18 @@ static const AVClass mediacodecndk_class = {
     .version = LIBAVUTIL_VERSION_INT,
 };
 
-AVCodec ff_h264_mediacodecndk_encoder = {
-    .name = "h264_mediacodecndk",
-    .long_name = NULL_IF_CONFIG_SMALL("h264 (MediaCodec NDK)"),
-    .type = AVMEDIA_TYPE_VIDEO,
-    .id = AV_CODEC_ID_H264,
+const FFCodec ff_h264_mediacodecndk_encoder = {
+    .p.name = "h264_mediacodecndk",
+    .p.long_name = NULL_IF_CONFIG_SMALL("h264 (MediaCodec NDK)"),
+    .p.type = AVMEDIA_TYPE_VIDEO,
+    .p.id = AV_CODEC_ID_H264,
     .priv_data_size = sizeof(MediaCodecNDKEncoderContext),
     .init = mediacodecndk_encode_init,
     .receive_packet = mediacodecndk_receive_packet,
     .close = mediacodecndk_encode_close,
-    .capabilities = AV_CODEC_CAP_DELAY,
-    .priv_class = &mediacodecndk_class,
-    .pix_fmts = (const enum AVPixelFormat[]){
+    .p.capabilities = AV_CODEC_CAP_DELAY,
+    .p.priv_class = &mediacodecndk_class,
+    .p.pix_fmts = (const enum AVPixelFormat[]){
         AV_PIX_FMT_NV12,
         AV_PIX_FMT_YUV420P,
         AV_PIX_FMT_NONE

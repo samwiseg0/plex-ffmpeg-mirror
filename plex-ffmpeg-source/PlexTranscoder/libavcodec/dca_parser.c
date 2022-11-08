@@ -348,7 +348,7 @@ static int dca_parse_params(DCAParseContext *pc1, AVCodecContext *avctx, const u
         return AVERROR_INVALIDDATA;
 
     *duration = h.npcmblocks * DCA_PCMBLOCK_SAMPLES;
-    *sample_rate = avpriv_dca_sample_rates[h.sr_code];
+    *sample_rate = ff_dca_sample_rates[h.sr_code];
 #if 0 //PLEX
     if (*profile != FF_PROFILE_UNKNOWN)
         return 0;
@@ -397,7 +397,7 @@ static int dca_parse_params(DCAParseContext *pc1, AVCodecContext *avctx, const u
 
     //PLEX
 parse_full:
-    if ((!avctx->channel_layout || !avctx->channels || !avctx->sample_rate)) {
+    if ((!avctx->ch_layout.nb_channels || avctx->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC || !avctx->sample_rate)) {
         const AVCRC *crctab = av_crc_get_table(AV_CRC_16_CCITT);
         int xch_pos = 0, x96_pos = 0, xxch_pos = 0, i;
         uint32_t mrk = AV_RB32(input);
@@ -421,9 +421,6 @@ parse_full:
                 int size, dist;
                 switch (h.ext_audio_type) {
                 case EXT_AUDIO_XCH:
-                    if (avctx->request_channel_layout)
-                        break;
-
                     // The distance between XCH sync word and end of the core frame
                     // must be equal to XCH frame size. Off by one error is allowed for
                     // compatibility with legacy bitstreams. Minimum XCH frame size is
@@ -462,9 +459,6 @@ parse_full:
                     break;
 
                 case EXT_AUDIO_XXCH:
-                    if (avctx->request_channel_layout)
-                        break;
-
                     // XXCH frame header CRC must be valid. Minimum XXCH frame header
                     // size is 11 bytes.
                     for (; sync_pos >= last_pos; sync_pos--) {
@@ -553,9 +547,16 @@ fail:
             return ret; */
     }
 
-    if (!avctx->channel_layout) {
-        avctx->channel_layout = get_channel_layout(ch_mask);
-        avctx->channels = av_get_channel_layout_nb_channels(avctx->channel_layout);
+    if (avctx->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
+        uint64_t layout = get_channel_layout(ch_mask);
+        av_channel_layout_from_mask(&avctx->ch_layout, layout);
+
+#if FF_API_OLD_CHANNEL_LAYOUT
+FF_DISABLE_DEPRECATION_WARNINGS
+        avctx->channels = avctx->ch_layout.nb_channels;
+        avctx->channel_layout = layout;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
     }
 
     if (avctx->sample_fmt == AV_SAMPLE_FMT_NONE)
@@ -605,7 +606,7 @@ static int dca_parse(AVCodecParserContext *s, AVCodecContext *avctx,
     return next;
 }
 
-AVCodecParser ff_dca_parser = {
+const AVCodecParser ff_dca_parser = {
     .codec_ids      = { AV_CODEC_ID_DTS },
     .priv_data_size = sizeof(DCAParseContext),
     .parser_init    = dca_parse_init,

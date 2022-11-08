@@ -92,8 +92,7 @@ int ff_h2645_extract_rbsp(const uint8_t *src, int length,
     } else if (i > length)
         i = length;
 
-    nal->rbsp_buffer = &rbsp->rbsp_buffer[rbsp->rbsp_buffer_size];
-    dst = nal->rbsp_buffer;
+    dst = &rbsp->rbsp_buffer[rbsp->rbsp_buffer_size];
 
     memcpy(dst, src, i);
     si = di = i;
@@ -467,7 +466,7 @@ int ff_h2645_packet_split(H2645Packet *pkt, const uint8_t *buf, int length,
             memset(pkt->nals + pkt->nals_allocated, 0, sizeof(*pkt->nals));
 
             nal = &pkt->nals[pkt->nb_nals];
-            nal->skipped_bytes_pos_size = 1024; // initial buffer size
+            nal->skipped_bytes_pos_size = FFMIN(1024, extract_length/3+1); // initial buffer size
             nal->skipped_bytes_pos = av_malloc_array(nal->skipped_bytes_pos_size, sizeof(*nal->skipped_bytes_pos));
             if (!nal->skipped_bytes_pos)
                 return AVERROR(ENOMEM);

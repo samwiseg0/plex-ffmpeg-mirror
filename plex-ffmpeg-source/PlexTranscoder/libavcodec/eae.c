@@ -36,6 +36,7 @@
 #include "libavutil/thread.h"
 #include "ac3_parser_internal.h"
 #include "avcodec.h"
+#include "codec_internal.h"
 #include "decode.h"
 #include "encode.h"
 #include "internal.h"
@@ -118,6 +119,7 @@ typedef struct EAEContext {
     char *opt_eae_prefix;
     int opt_eae_batch_frames;
     int opt_max_files;
+    AVChannelLayout downmix_layout;
 
     // State related to I/O thread.
     pthread_t io_thread;
@@ -287,10 +289,10 @@ static int eae_decode_init(AVCodecContext *avctx)
     EAEContext *s = avctx->priv_data;
     int def_batch_frames = 0;
     const char *folder = "Convert to WAV (to 8ch or less)";
-    if (avctx->request_channel_layout == AV_CH_LAYOUT_5POINT1_BACK ||
-        avctx->request_channel_layout == AV_CH_LAYOUT_5POINT1) {
+    if (0 /*avctx->request_channel_layout == AV_CH_LAYOUT_5POINT1_BACK ||
+        avctx->request_channel_layout == AV_CH_LAYOUT_5POINT1*/) {
         //folder = "Convert to WAV (to 6ch or less)";
-    } else if (avctx->request_channel_layout == AV_CH_LAYOUT_STEREO) {
+    } else if (!av_channel_layout_compare(&s->downmix_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO)) {
         folder = "Convert to WAV (to 2ch or less)";
     }
 
@@ -335,7 +337,7 @@ static int eae_encode_init(AVCodecContext *avctx)
         s->ext_out = "ac3";
         break;
     case AV_CODEC_ID_EAC3:
-        if (avctx->bit_rate >= 1024 * 1000 || avctx->channels > 6)
+        if (avctx->bit_rate >= 1024 * 1000 || avctx->ch_layout.nb_channels > 6)
             folder = "Convert to Dolby Digital Plus (Max Quality - 1024 kbps)";
         else
             folder = "Convert to Dolby Digital Plus (High Quality - 384 kbps)";
@@ -505,7 +507,7 @@ static uint32_t fourCCToInt(const char *fcc)
 static int eae_write_wav_header(AVCodecContext *avctx, XFILE *f, int sample_count)
 {
     int sample_size = av_get_bytes_per_sample(avctx->sample_fmt);
-    int data_size = sample_count * sample_size * avctx->channels;
+    int data_size = sample_count * sample_size * avctx->ch_layout.nb_channels;
 
     // RIFF header
     writeDWord(f, fourCCToInt("RIFF"));
@@ -518,16 +520,16 @@ static int eae_write_wav_header(AVCodecContext *avctx, XFILE *f, int sample_coun
 
     // WAVEFORMATEX
     writeWord(f, 0xFFFE);  // wFormatTag
-    writeWord(f, avctx->channels); // nChannels
+    writeWord(f, avctx->ch_layout.nb_channels); // nChannels
     writeDWord(f, avctx->sample_rate); // nSamplesPerSec
-    writeDWord(f, sample_size * avctx->channels * avctx->sample_rate); // nAvgBytesPerSec
-    writeWord(f, sample_size * avctx->channels); // nBlockAlign
+    writeDWord(f, sample_size * avctx->ch_layout.nb_channels * avctx->sample_rate); // nAvgBytesPerSec
+    writeWord(f, sample_size * avctx->ch_layout.nb_channels); // nBlockAlign
     writeWord(f, sample_size * 8); // wBitsPerSample
     writeWord(f, 22); // cbSize
 
     // WAVE_FORMAT_EXTENSIBLE
     writeWord(f, 4); // wValidBitsPerSample (in this case)
-    writeDWord(f, avctx->channel_layout); // dwChannelMask
+    writeDWord(f, av_channel_layout_subset(&avctx->ch_layout, AV_CH_LAYOUT_7POINT1)); // dwChannelMask
     if (avctx->sample_fmt == AV_SAMPLE_FMT_FLT) {
         writeBytes(guid_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 16, 1, f);
     } else {
@@ -583,7 +585,7 @@ static int eae_write_input_files(AVCodecContext *avctx)
         int sample_count = 0;
 
         for (i = 0; i < s->num_buffered; i++) {
-            int bps = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->channels;
+            int bps = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels;
             int nb_samples = s->input[i].buffer->size / bps;
             sample_count += nb_samples;
             if (i != s->num_buffered - 1 || !s->eof) {
@@ -687,6 +689,7 @@ static int eae_read_wav(AVCodecContext *avctx, FILE *f, eae_file *e)
 {
     EAEContext *s = avctx->priv_data;
     uint32_t bps, isfloat, pcmsize;
+    uint32_t channelMask;
 
     // While the input is a normal .wav file, we strictly parse only to the
     // extend we absolutely need, i.e. we have strict requirements on what the
@@ -702,14 +705,16 @@ static int eae_read_wav(AVCodecContext *avctx, FILE *f, eae_file *e)
     if (readDWord(f) != 18 + 22) // fmt chunk size
         return AVERROR_UNKNOWN;
     readWord(f); // skip wFormatTag
-    avctx->channels = readWord(f); // nChannels
+    av_channel_layout_default(&avctx->ch_layout, readWord(f)); // nChannels
     avctx->sample_rate = readDWord(f); // nSamplesPerSec
     readDWord(f); // skip nAvgBytesPerSec
     readWord(f); // skip nBlockAlign
     bps = readWord(f); // wBitsPerSample
     readWord(f); // skip cbSize
     avctx->bits_per_raw_sample = readWord(f); // wValidBitsPerSample (in this case)
-    avctx->channel_layout = readDWord(f); // dwChannelMask
+    channelMask = readDWord(f); // dwChannelMask
+    if (channelMask)
+        av_channel_layout_from_mask(&avctx->ch_layout, channelMask);
     // PCM or FLOAT GUID. Distinguish by the first byte, ignore rest.
     isfloat = readByte(f) == 0x03;
     fseek(f, 15, SEEK_CUR);
@@ -727,7 +732,7 @@ static int eae_read_wav(AVCodecContext *avctx, FILE *f, eae_file *e)
         return AVERROR_UNKNOWN;
     }
 
-    if (avctx->channels < 1 || avctx->channels > 8)
+    if (avctx->ch_layout.nb_channels < 1 || avctx->ch_layout.nb_channels > 8)
         return AVERROR_UNKNOWN;
     if (pcmsize > INT_MAX)
         return AVERROR_UNKNOWN;
@@ -1134,7 +1139,7 @@ static int eae_encode_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 
         // AVFrame.data[0] must point into the buffer ref, so this is ok.
         e->buffer->data = frame->data[0];
-        e->buffer->size = frame->nb_samples * av_get_bytes_per_sample(avctx->sample_fmt) * avctx->channels;
+        e->buffer->size = frame->nb_samples * av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels;
 
         e->pts = frame->pts;
 
@@ -1191,7 +1196,7 @@ static int eae_read_output(AVCodecContext *avctx)
         s->num_files--;
 
         if (err < 0) {
-            av_log(avctx, AV_LOG_ERROR, "error reading output\n");
+            av_log(avctx, AV_LOG_ERROR, "error reading output: %i (%s)\n", err, av_err2str(err));
             return err;
         }
     }
@@ -1237,7 +1242,7 @@ static int eae_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 
     av_assert0(s->output_buffer);
 
-    blocksize = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->channels;
+    blocksize = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels;
     samples = s->output_buffer->size / blocksize;
     if (samples * blocksize != s->output_buffer->size) {
         av_log(avctx, AV_LOG_ERROR, "EAE output with odd size\n");
@@ -1263,12 +1268,9 @@ static int eae_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
     // Discard any leftover queued packets from our previous batch
     while (avctx->internal->last_pkt_props->data &&
            avctx->internal->last_pkt_props->pts < s->output_frames[0].pts &&
-           avctx->internal->pkt_props) {
+           av_fifo_can_read(avctx->internal->pkt_props)) {
         av_packet_unref(avctx->internal->last_pkt_props);
-        err = avpriv_packet_list_get(&avctx->internal->pkt_props,
-                                     &avctx->internal->pkt_props_tail,
-                                     avctx->internal->last_pkt_props);
-        av_assert0(err != AVERROR(EAGAIN));
+        av_fifo_read(avctx->internal->pkt_props, avctx->internal->last_pkt_props, 1);
     }
 
     if ((err = ff_decode_frame_props(avctx, frame)) < 0)
@@ -1355,7 +1357,7 @@ static int eae_encode_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
         av_assert0(frame_size > 0);
 
         if (frame_size > buffer->size) {
-            av_log(avctx, AV_LOG_ERROR, "frame cut short: %d\n", buffer->size);
+            av_log(avctx, AV_LOG_ERROR, "frame cut short: %zu\n", buffer->size);
             err = AVERROR(EINVAL);
             goto error;
         }
@@ -1434,161 +1436,103 @@ static const AVOption options[] = {
 { "eae_prefix", "EAE file prefix", offsetof(EAEContext, opt_eae_prefix), AV_OPT_TYPE_STRING, {.str = "frame-" }, 0, 0, OPTFLAGS },
 { "eae_batch_frames", "EAE number of frames for each pass", offsetof(EAEContext, opt_eae_batch_frames), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1000, OPTFLAGS },
 { "eae_max_files", "EAE number of files on disk", offsetof(EAEContext, opt_max_files), AV_OPT_TYPE_INT, {.i64 = 2}, 1, NUM_MAX_FILES, OPTFLAGS },
+{ "downmix", "Request a specific channel layout from the decoder", offsetof(EAEContext, downmix_layout), AV_OPT_TYPE_CHLAYOUT, {.str = NULL}, .flags = OPTFLAGS },
 { NULL },
 };
 
-static const AVClass eae_ac3_decoder_class = {
-    "EAE AC3 decoder",
-    av_default_item_name,
-    options,
-    LIBAVUTIL_VERSION_INT,
+
+#define FFEAE_DEC_CLASS(namev) \
+    static const AVClass eae_##namev##dec_class = { \
+        .class_name = "eae_" #namev "_dec", \
+        .item_name  = av_default_item_name, \
+        .option     = options, \
+        .version    = LIBAVUTIL_VERSION_INT, \
+    };
+
+#define FFEAE_DEC(namev, longname, idv) \
+    FFEAE_DEC_CLASS(namev) \
+    const FFCodec ff_##namev##_eae_decoder = { \
+        .p.name           = #namev "_eae", \
+        .p.long_name      = NULL_IF_CONFIG_SMALL("EAE " longname " decoder"), \
+        .p.type           = AVMEDIA_TYPE_AUDIO, \
+        .p.id             = idv, \
+        .priv_data_size   = sizeof(EAEContext), \
+        .init             = eae_decode_init, \
+        .close            = eae_close, \
+        .receive_frame    = eae_decode_receive_frame, \
+        .flush            = eae_flush, \
+        .p.capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING, \
+        .caps_internal    = FF_CODEC_CAP_SETS_PKT_DTS | \
+                            FF_CODEC_CAP_INIT_THREADSAFE | \
+                            FF_CODEC_CAP_INIT_CLEANUP, \
+        .p.priv_class     = &eae_##namev##dec_class, \
+    };
+
+FFEAE_DEC(ac3, "AC-3", AV_CODEC_ID_AC3)
+FFEAE_DEC(eac3, "E-AC-3", AV_CODEC_ID_EAC3)
+FFEAE_DEC(truehd, "TrueHD", AV_CODEC_ID_TRUEHD)
+FFEAE_DEC(mlp, "MLP", AV_CODEC_ID_MLP)
+
+#define FFEAE_ENC_CLASS(namev) \
+    static const AVClass eae_##namev##enc_class = { \
+        .class_name = "eae_" #namev "_enc", \
+        .item_name  = av_default_item_name, \
+        .option     = options, \
+        .version    = LIBAVUTIL_VERSION_INT, \
+    };
+
+#define FFEAE_ENC(namev, longname, idv) \
+    FFEAE_ENC_CLASS(namev) \
+    const FFCodec ff_##namev##_eae_encoder = { \
+        .p.name           = #namev "_eae", \
+        .p.long_name      = NULL_IF_CONFIG_SMALL("EAE " longname " encoder"), \
+        .p.type           = AVMEDIA_TYPE_AUDIO, \
+        .p.id             = idv, \
+        .priv_data_size = sizeof(EAEContext), \
+        .init           = eae_encode_init, \
+        .close          = eae_close, \
+        .receive_packet = eae_encode_receive_packet, \
+        .flush          = eae_flush, \
+        .p.capabilities = AV_CODEC_CAP_DELAY, \
+        .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS | \
+                          FF_CODEC_CAP_INIT_THREADSAFE | \
+                          FF_CODEC_CAP_INIT_CLEANUP, \
+        .p.sample_fmts  = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLT, \
+                                                          AV_SAMPLE_FMT_S16, \
+                                                          AV_SAMPLE_FMT_NONE }, \
+        .p.supported_samplerates = (const int[]) { 48000, 0 }, \
+        .p.ch_layouts      = namev##_eae_ch_layouts, \
+        .p.channel_layouts = namev##_eae_channel_layouts, \
+        .p.priv_class      = &eae_##namev##enc_class, \
+    };
+
+static const AVChannelLayout ac3_eae_ch_layouts[] = {
+    AV_CHANNEL_LAYOUT_STEREO,
+    AV_CHANNEL_LAYOUT_5POINT1,
+    { 0 },
 };
 
-AVCodec ff_ac3_eae_decoder = {
-    .name           = "ac3_eae",
-    .long_name      = NULL_IF_CONFIG_SMALL("EAE AC3"),
-    .type           = AVMEDIA_TYPE_AUDIO,
-    .id             = AV_CODEC_ID_AC3,
-    .priv_data_size = sizeof(EAEContext),
-    .init           = eae_decode_init,
-    .close          = eae_close,
-    .receive_frame  = eae_decode_receive_frame,
-    .flush          = eae_flush,
-    .capabilities   = AV_CODEC_CAP_DELAY,
-    .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |
-                      FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
-    .priv_class     = &eae_ac3_decoder_class,
+static const AVChannelLayout eac3_eae_ch_layouts[] = {
+    AV_CHANNEL_LAYOUT_5POINT1,
+    AV_CHANNEL_LAYOUT_7POINT1,
+    { 0 },
 };
 
-static const AVClass eae_eac3_decoder_class = {
-    "EAE EAC3 decoder",
-    av_default_item_name,
-    options,
-    LIBAVUTIL_VERSION_INT,
+#if FF_API_OLD_CHANNEL_LAYOUT
+static const uint64_t ac3_eae_channel_layouts[] = {
+    AV_CH_LAYOUT_STEREO,
+    AV_CH_LAYOUT_5POINT1,
+    0,
 };
 
-AVCodec ff_eac3_eae_decoder = {
-    .name           = "eac3_eae",
-    .long_name      = NULL_IF_CONFIG_SMALL("EAE EAC3"),
-    .type           = AVMEDIA_TYPE_AUDIO,
-    .id             = AV_CODEC_ID_EAC3,
-    .priv_data_size = sizeof(EAEContext),
-    .init           = eae_decode_init,
-    .close          = eae_close,
-    .receive_frame  = eae_decode_receive_frame,
-    .flush          = eae_flush,
-    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
-    .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |
-                      FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
-    .priv_class     = &eae_eac3_decoder_class,
+static const uint64_t eac3_eae_channel_layouts[] = {
+    AV_CH_LAYOUT_5POINT1,
+    AV_CH_LAYOUT_7POINT1,
+    0,
 };
+#endif
 
-static const AVClass eae_truehd_decoder_class = {
-    "EAE TrueHD decoder",
-    av_default_item_name,
-    options,
-    LIBAVUTIL_VERSION_INT,
-};
-
-AVCodec ff_truehd_eae_decoder = {
-    .name           = "truehd_eae",
-    .long_name      = NULL_IF_CONFIG_SMALL("EAE TrueHD"),
-    .type           = AVMEDIA_TYPE_AUDIO,
-    .id             = AV_CODEC_ID_TRUEHD,
-    .priv_data_size = sizeof(EAEContext),
-    .init           = eae_decode_init,
-    .close          = eae_close,
-    .receive_frame  = eae_decode_receive_frame,
-    .flush          = eae_flush,
-    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
-    .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |
-                      FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
-    .priv_class     = &eae_truehd_decoder_class,
-};
-
-static const AVClass eae_mlp_decoder_class = {
-    "EAE MLP decoder",
-    av_default_item_name,
-    options,
-    LIBAVUTIL_VERSION_INT,
-};
-
-AVCodec ff_mlp_eae_decoder = {
-    .name           = "mlp_eae",
-    .long_name      = NULL_IF_CONFIG_SMALL("EAE MLP"),
-    .type           = AVMEDIA_TYPE_AUDIO,
-    .id             = AV_CODEC_ID_MLP,
-    .priv_data_size = sizeof(EAEContext),
-    .init           = eae_decode_init,
-    .close          = eae_close,
-    .receive_frame  = eae_decode_receive_frame,
-    .flush          = eae_flush,
-    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
-    .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |
-                      FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
-    .priv_class     = &eae_mlp_decoder_class,
-};
-
-static const AVClass eae_ac3_encoder_class = {
-    "EAE AC3 encoder",
-    av_default_item_name,
-    options,
-    LIBAVUTIL_VERSION_INT,
-};
-
-AVCodec ff_ac3_eae_encoder = {
-    .name           = "ac3_eae",
-    .long_name      = NULL_IF_CONFIG_SMALL("EAE AC3"),
-    .type           = AVMEDIA_TYPE_AUDIO,
-    .id             = AV_CODEC_ID_AC3,
-    .priv_data_size = sizeof(EAEContext),
-    .init           = eae_encode_init,
-    .close          = eae_close,
-    .receive_packet = eae_encode_receive_packet,
-    .flush          = eae_flush,
-    .capabilities   = AV_CODEC_CAP_DELAY,
-    .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |
-                      FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
-    .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLT,
-                                                      AV_SAMPLE_FMT_S16,
-                                                      AV_SAMPLE_FMT_NONE },
-    .supported_samplerates = (const int[]) { 48000, 0 },
-    .channel_layouts = (const uint64_t[]) { AV_CH_LAYOUT_STEREO,
-                                            AV_CH_LAYOUT_5POINT1, 0 },
-    .priv_class     = &eae_ac3_encoder_class,
-};
-
-static const AVClass eae_eac3_encoder_class = {
-    "EAE EAC3 encoder",
-    av_default_item_name,
-    options,
-    LIBAVUTIL_VERSION_INT,
-};
-
-AVCodec ff_eac3_eae_encoder = {
-    .name           = "eac3_eae",
-    .long_name      = NULL_IF_CONFIG_SMALL("EAE EAC3"),
-    .type           = AVMEDIA_TYPE_AUDIO,
-    .id             = AV_CODEC_ID_EAC3,
-    .priv_data_size = sizeof(EAEContext),
-    .init           = eae_encode_init,
-    .close          = eae_close,
-    .receive_packet = eae_encode_receive_packet,
-    .flush          = eae_flush,
-    .capabilities   = AV_CODEC_CAP_DELAY,
-    .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |
-                      FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
-    .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLT,
-                                                      AV_SAMPLE_FMT_S16,
-                                                      AV_SAMPLE_FMT_NONE },
-    .supported_samplerates = (const int[]) { 48000, 0 },
-    .channel_layouts = (const uint64_t[]) { AV_CH_LAYOUT_5POINT1,
-                                            AV_CH_LAYOUT_7POINT1, 0 },
-    .priv_class     = &eae_eac3_encoder_class,
-};
+FF_DISABLE_DEPRECATION_WARNINGS
+FFEAE_ENC(ac3, "AC-3", AV_CODEC_ID_AC3)
+FFEAE_ENC(eac3, "E-AC-3", AV_CODEC_ID_EAC3)
+FF_ENABLE_DEPRECATION_WARNINGS
