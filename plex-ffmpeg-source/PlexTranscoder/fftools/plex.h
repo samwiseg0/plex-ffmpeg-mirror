@@ -84,6 +84,7 @@ typedef struct
     int file_index;
     int stream_index;
     AVFilterContext *ctx;
+    int width, height;
 } InlineAssContext;
 
 typedef struct

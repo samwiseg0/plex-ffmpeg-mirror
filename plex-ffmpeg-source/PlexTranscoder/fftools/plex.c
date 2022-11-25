@@ -407,6 +407,8 @@ void plex_link_subtitles_to_graph(AVFilterGraph* g)
                 AVFilterContext *ctx = graph->filters[i];
                 InlineAssContext *assCtx = &plexContext.inlineass_ctxs[contextId++];
                 assCtx->ctx = ctx;
+                if (assCtx->width && assCtx->height)
+                    avfilter_inlineass_set_storage_size(ctx, assCtx->width, assCtx->height);
 
                 for (int j = 0; j < nb_input_streams; j++) {
                     InputStream *ist = input_streams[j];
@@ -536,8 +538,11 @@ void plex_link_input_stream(const InputStream *ist)
 #if CONFIG_INLINEASS_FILTER
     int i;
     if (ist->st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
-        for (i = 0; i < plexContext.nb_inlineass_ctxs; i++)
+        for (i = 0; i < plexContext.nb_inlineass_ctxs; i++) {
             if (plexContext.inlineass_ctxs[i].ctx)
                 avfilter_inlineass_set_storage_size(plexContext.inlineass_ctxs[i].ctx, ist->st->codecpar->width, ist->st->codecpar->height);
+            plexContext.inlineass_ctxs[i].width = ist->st->codecpar->width;
+            plexContext.inlineass_ctxs[i].height = ist->st->codecpar->height;
+        }
 #endif
 }

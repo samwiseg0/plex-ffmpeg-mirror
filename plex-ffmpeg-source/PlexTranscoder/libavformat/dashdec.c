@@ -1402,7 +1402,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
             } else if (!av_strcasecmp(adaptationset_node->name, "SegmentList")) {
                 period_segmentlist_node = adaptationset_node;
             } else if (!av_strcasecmp(adaptationset_node->name, "AdaptationSet")) {
-                parse_manifest_adaptationset(s, url, adaptationset_node, mpd_baseurl_node, period_baseurl_node, period_segmenttemplate_node, period_segmentlist_node);
+                parse_manifest_adaptationset(s, c->base_url, adaptationset_node, mpd_baseurl_node, period_baseurl_node, period_segmenttemplate_node, period_segmentlist_node);
             }
             adaptationset_node = xmlNextElementSibling(adaptationset_node);
         }
@@ -1936,8 +1936,12 @@ static int reopen_demux_for_component(AVFormatContext *s, struct representation 
 
     if (pls->init_sec_data_len <= 0) {
         /* load/update Media Initialization Section, if any */
-        if ((ret = update_init_section(pls)) < 0)
+        if ((ret = update_init_section(pls)) < 0) {
+            av_log(s, AV_LOG_ERROR, "Error when loading init segment\n");
+            avformat_free_context(pls->ctx);
+            pls->ctx = NULL;
             goto fail;
+        }
     }
 
     pls->ctx->flags = AVFMT_FLAG_CUSTOM_IO;

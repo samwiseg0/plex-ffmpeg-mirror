@@ -344,7 +344,7 @@ static int mediacodecndk_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
                 continue;
             }
 
-            if ((ret = ff_alloc_packet(avctx, pkt, bufferInfo.size) < 0)) {
+            if ((ret = ff_get_encode_buffer(avctx, pkt, bufferInfo.size, 0) < 0)) {
                 AMediaCodec_releaseOutputBuffer(ctx->encoder, encoderStatus, false);
                 av_log(avctx, AV_LOG_ERROR, "Failed to allocate packet: %i\n", ret);
                 return ret;
