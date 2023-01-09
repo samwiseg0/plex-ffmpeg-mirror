@@ -280,6 +280,7 @@ static int eae_common_init(AVCodecContext *avctx, const char *subfolder)
 
     s->prev_pts = AV_NOPTS_VALUE;
     s->prev_pts_samples = 0;
+    av_fifo_auto_grow_limit(avctx->internal->pkt_props, 65536);
 
     return 0;
 }

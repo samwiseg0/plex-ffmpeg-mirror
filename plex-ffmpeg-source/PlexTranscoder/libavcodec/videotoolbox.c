@@ -1125,7 +1125,7 @@ static int videotoolbox_prores_end_frame(AVCodecContext *avctx)
 
 static enum AVPixelFormat videotoolbox_best_pixel_format(AVCodecContext *avctx) {
     const AVPixFmtDescriptor *descriptor = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
-    if (!descriptor)
+    if (!descriptor || getenv("LAVC_VT_ALWAYS_NV12"))
         return AV_PIX_FMT_NV12; // same as av_videotoolbox_alloc_context()
 
     int depth = descriptor->comp[0].depth;
