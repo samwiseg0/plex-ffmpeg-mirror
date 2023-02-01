@@ -429,6 +429,7 @@ typedef struct FFStream {
      * Number of frames that have been demuxed during avformat_find_stream_info()
      */
     int codec_info_nb_frames;
+    int codec_info_nb_frames_total;
 
     /**
      * Stream Identifier

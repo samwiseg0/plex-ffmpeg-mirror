@@ -1274,8 +1274,19 @@ static int open_input_file(OptionsContext *o, const char *filename)
                 st->avg_frame_rate = sti->avg_frame_rate_pre;
             }
             for (i = 0; i < orig_nb_streams; i++) {
+                AVStream *st = ic->streams[i];
+                FFStream *const sti = ffstream(st);
+
                 av_dict_free(&opts[i]);
-                ffstream(ic->streams[i])->codec_info_nb_frames = 0;
+
+                if (sti->info) {
+                    memset(sti->info, 0, sizeof(*sti->info));
+                    sti->info->last_dts = AV_NOPTS_VALUE;
+                    sti->info->fps_first_dts = AV_NOPTS_VALUE;
+                    sti->info->fps_last_dts  = AV_NOPTS_VALUE;
+                }
+
+                sti->codec_info_nb_frames = 0;
             }
             av_freep(&opts);
             opts = setup_find_stream_info_opts(ic, o->g->codec_opts);
@@ -2663,7 +2674,7 @@ loop_end:
                 if (ignore_unknown_streams &&
                     (ist->st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
                      ist->st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
-                    ffstream(ist->st)->codec_info_nb_frames == 0) {
+                    ffstream(ist->st)->codec_info_nb_frames_total == 0) {
                     av_log(NULL, AV_LOG_WARNING, "Skipping stream #%d:%d - not parsed.\n",
                            map->file_index, map->stream_index);
                     continue;

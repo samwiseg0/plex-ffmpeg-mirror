@@ -1132,12 +1132,14 @@ static enum AVPixelFormat videotoolbox_best_pixel_format(AVCodecContext *avctx) 
 
 #if TARGET_OS_IPHONE
     // iOS has limited support for non-8-bit integer formats in OpenGL, so we use F16 there.
-    if ((descriptor->flags & AV_PIX_FMT_FLAG_ALPHA) ||
-        depth > 8 ||
-        descriptor->log2_chroma_w == 0 ||
-        descriptor->log2_chroma_h == 0)
+    if (!getenv("LAVC_VT_NO_RGBAF16") &&
+        ((descriptor->flags & AV_PIX_FMT_FLAG_ALPHA) ||
+         depth > 8 ||
+         descriptor->log2_chroma_w == 0 ||
+         descriptor->log2_chroma_h == 0))
         return AV_PIX_FMT_RGBAF16;
-#else
+#endif
+
     if (descriptor->flags & AV_PIX_FMT_FLAG_ALPHA)
         return AV_PIX_FMT_AYUV64;
 
@@ -1168,7 +1170,6 @@ static enum AVPixelFormat videotoolbox_best_pixel_format(AVCodecContext *avctx) 
     if (depth > 8) {
         return AV_PIX_FMT_P010;
     }
-#endif
 #endif
 
     return AV_PIX_FMT_NV12;

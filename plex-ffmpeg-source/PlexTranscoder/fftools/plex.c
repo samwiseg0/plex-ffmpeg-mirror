@@ -265,7 +265,7 @@ void plex_report_stream_detail(AVStream *st)
 
     if ((st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
          st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
-        sti->codec_info_nb_frames == 0)
+        sti->codec_info_nb_frames_total == 0)
         return; // Unparsed stream; will be skipped in output
 
     if (plexContext.progress_url &&

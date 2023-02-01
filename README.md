@@ -45,17 +45,6 @@ distinct source, it lands in `PlexTranscoder-2/`.
    **Actions** tab, select **Refresh Plex FFMPEG source**, and click **Run
    workflow**.
 
-## Beta (Plex Pass) channel
-
-By default the public **stable** channel is mirrored. To follow the Plex Pass
-**beta** channel instead, add a repository secret named `PLEX_TOKEN` (your Plex
-account's `X-Plex-Token`): **Settings -> Secrets and variables -> Actions -> New
-repository secret**. When set, the workflow queries
-`downloads/5.json?channel=plexpass`; the token is sent as an HTTP header, never
-in a URL. Remove the secret to go back to stable.
-
-Locally: `PLEX_TOKEN=xxxx zsh tools/fetch-plex-ffmpeg.zsh`.
-
 ## Run locally
 
 ```zsh

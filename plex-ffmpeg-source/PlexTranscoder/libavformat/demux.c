@@ -2853,6 +2853,7 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
             av_packet_unref(pkt1);
 
         sti->codec_info_nb_frames++;
+        sti->codec_info_nb_frames_total++;
         count++;
     }
 

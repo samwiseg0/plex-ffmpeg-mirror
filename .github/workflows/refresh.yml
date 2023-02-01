@@ -27,10 +27,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh jq
 
       - name: Fetch and unpack Plex FFMPEG source
-        env:
-          # Optional: set a PLEX_TOKEN repo secret to follow the Plex Pass
-          # (beta) channel. Without it, the public stable channel is used.
-          PLEX_TOKEN: ${{ secrets.PLEX_TOKEN }}
         run: zsh tools/fetch-plex-ffmpeg.zsh
 
       - name: Commit changes if any
