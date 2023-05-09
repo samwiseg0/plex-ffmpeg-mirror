@@ -21,8 +21,8 @@
 
 #include "shared.h"
 
-extern const enum AVPixelFormat fmt_src, fmt_dst;
-extern const int depth_src, depth_dst;
+extern const __device__ enum AVPixelFormat fmt_src, fmt_dst;
+extern const __device__ int depth_src, depth_dst;
 
 // Single-sample read function
 template<class T, int p>

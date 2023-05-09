@@ -32,13 +32,13 @@
 #define ST2084_C3 18.6875f
 #define SDR_AVG   0.25f
 
-extern const float3 luma_src, luma_dst;
-extern const enum AVColorTransferCharacteristic trc_src, trc_dst;
-extern const enum AVColorRange range_src, range_dst;
-extern const enum AVChromaLocation chroma_loc_src, chroma_loc_dst;
-extern const bool rgb2rgb_passthrough;
-extern const float rgb2rgb_matrix[9];
-extern const float yuv_matrix[9], rgb_matrix[9];
+extern const __device__ float3 luma_src, luma_dst;
+extern const __device__ enum AVColorTransferCharacteristic trc_src, trc_dst;
+extern const __device__ enum AVColorRange range_src, range_dst;
+extern const __device__ enum AVChromaLocation chroma_loc_src, chroma_loc_dst;
+extern const __device__ bool rgb2rgb_passthrough;
+extern const __device__ float rgb2rgb_matrix[9];
+extern const __device__ float yuv_matrix[9], rgb_matrix[9];
 
 static __inline__ __device__ float get_luma_dst(float3 c, const float3& luma_dst) {
     return luma_dst.x * c.x + luma_dst.y * c.y + luma_dst.z * c.z;

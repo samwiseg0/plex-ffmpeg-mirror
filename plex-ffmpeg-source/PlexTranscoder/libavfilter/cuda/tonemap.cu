@@ -25,8 +25,8 @@
 #include "tonemap.h"
 #include "util.h"
 
-extern const enum TonemapAlgorithm tonemap_func;
-extern const float tone_param;
+extern const __device__ enum TonemapAlgorithm tonemap_func;
+extern const __device__ float tone_param;
 
 #define mix(x, y, a) ((x) + ((y) - (x)) * (a))
 

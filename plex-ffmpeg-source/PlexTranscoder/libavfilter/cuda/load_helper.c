@@ -52,7 +52,7 @@ static int decompress_data(void *avctx, void **to_free, const void **data, unsig
     }
 
     stream.next_in = *data;
-    stream.avail_in = length;
+    stream.avail_in = *length;
 
     do {
         stream.avail_out = buf_size - stream.total_out;
@@ -117,10 +117,9 @@ int ff_cuda_link_add_data(void *avctx, AVCUDADeviceContext *hwctx, CUlinkState l
     if ((ret = decompress_data(avctx, &to_free, &data, &length)) < 0)
         return ret;
 
-    ret = CHECK_CU(cu->cuLinkAddData(link_state, CU_JIT_INPUT_PTX, data, length, name,
+    ret = CHECK_CU(cu->cuLinkAddData(link_state, CU_JIT_INPUT_PTX, (void*)data, length, name,
                                      nb_options, options, option_values));
     av_free(to_free);
 
     return ret;
 }
-
