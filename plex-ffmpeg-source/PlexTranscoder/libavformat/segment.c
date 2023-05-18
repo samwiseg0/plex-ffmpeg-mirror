@@ -751,7 +751,8 @@ static int seg_init(AVFormatContext *s)
 
     //PLEX
     if (seg->segment_copyts)
-        seg->segment_count = seg->segment_idx;
+        seg->segment_count = seg->segment_idx + seg->segment_idx_wrap * seg->segment_idx_wrap_nb;
+    seg->cur_entry.index = seg->segment_idx + seg->segment_idx_wrap * seg->segment_idx_wrap_nb;
     //PLEX
 
     if (seg->initial_offset > 0) {
@@ -902,9 +903,6 @@ static int seg_write_header(AVFormatContext *s)
             oc->pb->seekable = 0;
     }
 
-    if (seg->list_unfinished)
-        ret = segment_write_list(s, 0, 0);
-
     return 0;
 }
 
@@ -962,6 +960,20 @@ calc_times:
             av_ts2timestr(pkt->duration, &st->time_base),
             pkt->flags & AV_PKT_FLAG_KEY,
             pkt->stream_index == seg->reference_stream_index ? seg->frame_count : -1);
+
+//PLEX
+    if (pkt->stream_index == seg->reference_stream_index && seg->list_unfinished &&
+        !seg->frame_count) {
+        seg->cur_entry.index = seg->segment_idx;
+        seg->cur_entry.start_time = (double)pkt->pts * av_q2d(st->time_base);
+        seg->cur_entry.start_pts = av_rescale_q(pkt->pts, st->time_base, AV_TIME_BASE_Q);
+        seg->cur_entry.end_time = seg->cur_entry.start_time;
+        seg->cur_entry.end_audio_time = seg->cur_entry.end_time;
+        seg->cur_entry.end_video_time = seg->cur_entry.end_time;
+        if ((ret = segment_write_list(s, 0, 0)) < 0)
+            goto fail;
+    }
+//PLEX
 
     if (pkt->stream_index == seg->reference_stream_index &&
         (pkt->flags & AV_PKT_FLAG_KEY || seg->break_non_keyframes) &&

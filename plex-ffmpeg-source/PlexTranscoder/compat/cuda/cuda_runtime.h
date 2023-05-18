@@ -29,6 +29,7 @@
 #define __device_builtin__ __attribute__((device_builtin))
 #define __align__(N) __attribute__((aligned(N)))
 #define __inline__ __inline__ __attribute__((always_inline))
+#define __constant__ __attribute__((constant))
 
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
