@@ -385,7 +385,11 @@ static int segment_write_list(AVFormatContext *s, int complete, int is_last)
             SegmentListEntry *entry;
 
             //PLEX
-            if (complete && seg->list_unfinished) {
+            // If this is the first time calling write_list (such as in an
+            // empty segment) we need to allocate an entry to write,
+            // otherwise use the previously uncompleted entry.
+            //
+            if (complete && seg->list_unfinished && seg->segment_list_entries) {
                 entry = seg->segment_list_entries_end;
                 av_free(entry->filename);
             } else {
