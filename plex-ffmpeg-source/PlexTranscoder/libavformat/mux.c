@@ -1153,12 +1153,27 @@ const AVPacket *ff_interleaved_peek(AVFormatContext *s, int stream)
     return NULL;
 }
 
+static int do_new_extradata_copy(AVCodecParameters *par, AVPacket *pkt) {
+    size_t side_size;
+    uint8_t *side = av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA, &side_size);
+    if (side) {
+        uint8_t *new_extra = av_mallocz(side_size + AV_INPUT_BUFFER_PADDING_SIZE);
+        if (!new_extra)
+            return AVERROR(ENOMEM);
+        memcpy(new_extra, side, side_size);
+        av_free(par->extradata);
+        par->extradata = new_extra;
+        par->extradata_size = side_size;
+    }
+    return 1;
+}
+
 static int check_bitstream(AVFormatContext *s, FFStream *sti, AVPacket *pkt)
 {
     int ret;
 
     if (!(s->flags & AVFMT_FLAG_AUTO_BSF))
-        return 1;
+        return do_new_extradata_copy(sti->pub.codecpar, pkt);
 
     if (s->oformat->check_bitstream) {
         if (!sti->bitstream_checked) {
@@ -1168,6 +1183,9 @@ static int check_bitstream(AVFormatContext *s, FFStream *sti, AVPacket *pkt)
                 sti->bitstream_checked = 1;
         }
     }
+
+    if (!sti->bsfc)
+        return do_new_extradata_copy(sti->pub.codecpar, pkt);
 
     return 1;
 }

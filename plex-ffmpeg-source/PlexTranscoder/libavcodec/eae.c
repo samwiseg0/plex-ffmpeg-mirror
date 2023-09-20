@@ -403,7 +403,7 @@ static FILE *eae_wait_and_open(void *log, const char *path)
 
         // Timeout rather than potentially freezing forever.
         gettimeofday(&now, NULL);
-        if (now.tv_sec > start.tv_sec + 2)
+        if (now.tv_sec > start.tv_sec + 4)
             break;
     }
 
