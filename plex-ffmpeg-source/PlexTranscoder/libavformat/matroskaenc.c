@@ -808,6 +808,101 @@ static void put_xiph_size(AVIOContext *pb, int size)
     avio_w8(pb, size % 255);
 }
 
+#if CONFIG_MATROSKA_MUXER
+static int mkv_reformat_h2645(MatroskaMuxContext *mkv, AVIOContext *pb,
+                              const AVPacket *pkt, int *size)
+{
+    int ret;
+    if (pb) {
+        ff_nal_units_write_list(&mkv->cur_block.h2645_nalu_list, pb, pkt->data);
+    } else {
+        ret = ff_nal_units_create_list(&mkv->cur_block.h2645_nalu_list, pkt->data, pkt->size);
+        if (ret < 0)
+            return ret;
+        *size = ret;
+    }
+    return 0;
+}
+
+static int mkv_reformat_wavpack(MatroskaMuxContext *mkv, AVIOContext *pb,
+                                const AVPacket *pkt, int *size)
+{
+    const uint8_t *src = pkt->data;
+    int srclen = pkt->size;
+    int offset = 0;
+    int ret;
+
+    while (srclen >= WV_HEADER_SIZE) {
+        WvHeader header;
+
+        ret = ff_wv_parse_header(&header, src);
+        if (ret < 0)
+            return ret;
+        src    += WV_HEADER_SIZE;
+        srclen -= WV_HEADER_SIZE;
+
+        if (srclen < header.blocksize)
+            return AVERROR_INVALIDDATA;
+
+        offset += 4 * !!header.initial + 8 + 4 * !(header.initial && header.final);
+        if (pb) {
+            if (header.initial)
+                avio_wl32(pb, header.samples);
+            avio_wl32(pb, header.flags);
+            avio_wl32(pb, header.crc);
+
+            if (!(header.initial && header.final))
+                avio_wl32(pb, header.blocksize);
+
+            avio_write(pb, src, header.blocksize);
+        }
+        src    += header.blocksize;
+        srclen -= header.blocksize;
+        offset += header.blocksize;
+    }
+    *size = offset;
+
+    return 0;
+}
+#endif
+
+static int mkv_reformat_av1(MatroskaMuxContext *mkv, AVIOContext *pb,
+                            const AVPacket *pkt, int *size)
+{
+    int ret = ff_av1_filter_obus(pb, pkt->data, pkt->size);
+    if (ret < 0)
+        return ret;
+    *size = ret;
+    return 0;
+}
+
+static int webm_reformat_vtt(MatroskaMuxContext *mkv, AVIOContext *pb,
+                             const AVPacket *pkt, int *size)
+{
+    const uint8_t *id, *settings;
+    size_t id_size, settings_size;
+    unsigned total = pkt->size + 2U;
+
+    if (total > INT_MAX)
+        return AVERROR(ERANGE);
+
+    id       = av_packet_get_side_data(pkt, AV_PKT_DATA_WEBVTT_IDENTIFIER,
+                                       &id_size);
+    settings = av_packet_get_side_data(pkt, AV_PKT_DATA_WEBVTT_SETTINGS,
+                                       &settings_size);
+    if (id_size > INT_MAX - total || settings_size > INT_MAX - (total += id_size))
+        return AVERROR(ERANGE);
+    *size = total += settings_size;
+    if (pb) {
+        avio_write(pb, id, id_size);
+        avio_w8(pb, '\n');
+        avio_write(pb, settings, settings_size);
+        avio_w8(pb, '\n');
+        avio_write(pb, pkt->data, pkt->size);
+    }
+    return 0;
+}
+
 /**
  * Free the members allocated in the mux context.
  */
@@ -1085,7 +1180,7 @@ static int get_aac_sample_rates(AVFormatContext *s, MatroskaMuxContext *mkv,
 
 static int mkv_write_native_codecprivate(AVFormatContext *s, AVIOContext *pb,
                                          const AVCodecParameters *par,
-                                         AVIOContext *dyn_cp)
+                                         AVIOContext *dyn_cp, mkv_track *track)
 {
     switch (par->codec_id) {
     case AV_CODEC_ID_VORBIS:
@@ -1104,8 +1199,18 @@ static int mkv_write_native_codecprivate(AVFormatContext *s, AVIOContext *pb,
     case AV_CODEC_ID_WAVPACK:
         return put_wv_codecpriv(dyn_cp, par);
     case AV_CODEC_ID_H264:
-        return ff_isom_write_avcc(dyn_cp, par->extradata,
-                                  par->extradata_size);
+        if ((par->extradata_size > 0) && 
+            (AV_RB24(par->extradata) == 1 || AV_RB32(par->extradata) == 1) &&
+            (track != NULL) && (track->reformat == mkv_reformat_h2645))
+        {
+            return ff_isom_write_avcc(dyn_cp, par->extradata,
+                par->extradata_size);
+        }
+        else
+        {
+            avio_write(dyn_cp, par->extradata, par->extradata_size);
+            break;
+        }
     case AV_CODEC_ID_HEVC:
         return ff_isom_write_hvcc(dyn_cp, par->extradata,
                                   par->extradata_size, 0);
@@ -1160,7 +1265,7 @@ static int mkv_write_native_codecprivate(AVFormatContext *s, AVIOContext *pb,
 
 static int mkv_write_codecprivate(AVFormatContext *s, AVIOContext *pb,
                                   AVCodecParameters *par,
-                                  int native_id, int qt_id)
+                                  int native_id, int qt_id, mkv_track *track)
 {
     MatroskaMuxContext av_unused *const mkv = s->priv_data;
     AVIOContext *dyn_cp;
@@ -1172,7 +1277,7 @@ static int mkv_write_codecprivate(AVFormatContext *s, AVIOContext *pb,
         return ret;
 
     if (native_id) {
-        ret = mkv_write_native_codecprivate(s, pb, par, dyn_cp);
+        ret = mkv_write_native_codecprivate(s, pb, par, dyn_cp, track);
 #if CONFIG_MATROSKA_MUXER
     } else if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
         if (qt_id) {
@@ -1838,7 +1943,7 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
 
     if (!IS_WEBM(mkv) || par->codec_id != AV_CODEC_ID_WEBVTT) {
         track->codecpriv_offset = avio_tell(pb);
-        ret = mkv_write_codecprivate(s, pb, par, native_id, qt_id);
+        ret = mkv_write_codecprivate(s, pb, par, native_id, qt_id, track);
         if (ret < 0)
             return ret;
     }
@@ -2436,101 +2541,6 @@ static int mkv_write_header(AVFormatContext *s)
     return 0;
 }
 
-#if CONFIG_MATROSKA_MUXER
-static int mkv_reformat_h2645(MatroskaMuxContext *mkv, AVIOContext *pb,
-                              const AVPacket *pkt, int *size)
-{
-    int ret;
-    if (pb) {
-        ff_nal_units_write_list(&mkv->cur_block.h2645_nalu_list, pb, pkt->data);
-    } else {
-        ret = ff_nal_units_create_list(&mkv->cur_block.h2645_nalu_list, pkt->data, pkt->size);
-        if (ret < 0)
-            return ret;
-        *size = ret;
-    }
-    return 0;
-}
-
-static int mkv_reformat_wavpack(MatroskaMuxContext *mkv, AVIOContext *pb,
-                                const AVPacket *pkt, int *size)
-{
-    const uint8_t *src = pkt->data;
-    int srclen = pkt->size;
-    int offset = 0;
-    int ret;
-
-    while (srclen >= WV_HEADER_SIZE) {
-        WvHeader header;
-
-        ret = ff_wv_parse_header(&header, src);
-        if (ret < 0)
-            return ret;
-        src    += WV_HEADER_SIZE;
-        srclen -= WV_HEADER_SIZE;
-
-        if (srclen < header.blocksize)
-            return AVERROR_INVALIDDATA;
-
-        offset += 4 * !!header.initial + 8 + 4 * !(header.initial && header.final);
-        if (pb) {
-            if (header.initial)
-                avio_wl32(pb, header.samples);
-            avio_wl32(pb, header.flags);
-            avio_wl32(pb, header.crc);
-
-            if (!(header.initial && header.final))
-                avio_wl32(pb, header.blocksize);
-
-            avio_write(pb, src, header.blocksize);
-        }
-        src    += header.blocksize;
-        srclen -= header.blocksize;
-        offset += header.blocksize;
-    }
-    *size = offset;
-
-    return 0;
-}
-#endif
-
-static int mkv_reformat_av1(MatroskaMuxContext *mkv, AVIOContext *pb,
-                            const AVPacket *pkt, int *size)
-{
-    int ret = ff_av1_filter_obus(pb, pkt->data, pkt->size);
-    if (ret < 0)
-        return ret;
-    *size = ret;
-    return 0;
-}
-
-static int webm_reformat_vtt(MatroskaMuxContext *mkv, AVIOContext *pb,
-                             const AVPacket *pkt, int *size)
-{
-    const uint8_t *id, *settings;
-    size_t id_size, settings_size;
-    unsigned total = pkt->size + 2U;
-
-    if (total > INT_MAX)
-        return AVERROR(ERANGE);
-
-    id       = av_packet_get_side_data(pkt, AV_PKT_DATA_WEBVTT_IDENTIFIER,
-                                       &id_size);
-    settings = av_packet_get_side_data(pkt, AV_PKT_DATA_WEBVTT_SETTINGS,
-                                       &settings_size);
-    if (id_size > INT_MAX - total || settings_size > INT_MAX - (total += id_size))
-        return AVERROR(ERANGE);
-    *size = total += settings_size;
-    if (pb) {
-        avio_write(pb, id, id_size);
-        avio_w8(pb, '\n');
-        avio_write(pb, settings, settings_size);
-        avio_w8(pb, '\n');
-        avio_write(pb, pkt->data, pkt->size);
-    }
-    return 0;
-}
-
 static int mkv_write_block(void *logctx, MatroskaMuxContext *mkv,
                            AVIOContext *pb, const AVCodecParameters *par,
                            mkv_track *track, const AVPacket *pkt,
@@ -2653,7 +2663,7 @@ static int mkv_check_new_extra_data(AVFormatContext *s, const AVPacket *pkt)
                 return ret;
             memcpy(par->extradata, side_data, side_data_size);
             avio_seek(mkv->track.bc, track->codecpriv_offset, SEEK_SET);
-            mkv_write_codecprivate(s, mkv->track.bc, par, 1, 0);
+            mkv_write_codecprivate(s, mkv->track.bc, par, 1, 0, NULL);
             filler = MAX_PCE_SIZE + 2 + 4 - (avio_tell(mkv->track.bc) - track->codecpriv_offset);
             if (filler)
                 put_ebml_void(mkv->track.bc, filler);
@@ -2676,7 +2686,7 @@ static int mkv_check_new_extra_data(AVFormatContext *s, const AVPacket *pkt)
             }
             par->extradata = side_data;
             avio_seek(mkv->track.bc, track->codecpriv_offset, SEEK_SET);
-            mkv_write_codecprivate(s, mkv->track.bc, par, 1, 0);
+            mkv_write_codecprivate(s, mkv->track.bc, par, 1, 0, NULL);
             par->extradata = old_extradata;
         }
         break;
