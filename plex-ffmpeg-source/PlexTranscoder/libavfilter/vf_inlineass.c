@@ -694,7 +694,7 @@ void avfilter_inlineass_add_attachment(AVFilterContext *context, AVStream *st)
 void avfilter_inlineass_set_fonts(AVFilterContext *context)
 {
     AssContext* ass = context->priv;
-    ass_set_fonts(ass->renderer, ass->font_path, "DejaVu Sans", 1, ass->fc_file, 1);
+    ass_set_fonts(ass->renderer, ass->font_path, ass->font_name, 1, ass->fc_file, 1);
 }
 
 static int process_header(AVFilterContext *link, AVCodecContext *dec_ctx)
