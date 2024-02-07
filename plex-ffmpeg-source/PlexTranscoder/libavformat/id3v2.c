@@ -331,10 +331,17 @@ static void read_ttag(AVFormatContext *s, AVIOContext *pb, int taglen,
     if (taglen < 1)
         return;
 
+    // Check if the next byte is encoding or the start of a ISO8859 string
     encoding = avio_r8(pb);
-    taglen--; /* account for encoding type byte */
+    if (encoding < 0x20)
+      taglen--; /* account for encoding type byte */
+    else
+    {
+      encoding = ID3v2_ENCODING_ISO8859;
+      avio_seek(pb, -1, SEEK_CUR); /* back the stream up a byte */
+    }
 
-    while (taglen > 1) {
+    while (taglen > 0) {
         if (decode_str(s, pb, encoding, &dst, &taglen) < 0) {
             av_log(s, AV_LOG_ERROR, "Error reading frame %s, skipped\n", key);
             return;
