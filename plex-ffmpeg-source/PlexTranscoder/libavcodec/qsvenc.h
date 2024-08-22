@@ -26,7 +26,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include <mfx/mfxvideo.h>
+#include <mfxvideo.h>
 
 #include "libavutil/avutil.h"
 #include "libavutil/fifo.h"
@@ -139,10 +139,11 @@ typedef struct QSVEncContext {
 #if QSV_HAVE_EXT_VP9_PARAM
     mfxExtVP9Param  extvp9param;
 #endif
-
+#if QSV_HAVE_OPAQUE
     mfxExtOpaqueSurfaceAlloc opaque_alloc;
     mfxFrameSurface1       **opaque_surfaces;
     AVBufferRef             *opaque_alloc_buf;
+#endif
 
     mfxExtVideoSignalInfo extvsi;
 
