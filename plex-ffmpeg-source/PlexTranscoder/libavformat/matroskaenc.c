@@ -241,6 +241,7 @@ typedef struct MatroskaMuxContext {
     int                 flipped_raw_rgb;
     int                 default_mode;
     int                 move_cues_to_front;
+    int                 strip_dovi; // PLEX
 
     uint32_t            segment_uid[4];
 } MatroskaMuxContext;
@@ -1864,7 +1865,7 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
         if (ret < 0)
             return ret;
 
-        if (!IS_WEBM(mkv))
+        if (!IS_WEBM(mkv) && !mkv->strip_dovi) // PLEX
             mkv_write_dovi(s, pb, st);
 
         break;
@@ -3283,6 +3284,9 @@ static const AVOption options[] = {
     { "infer", "For each track type, mark each track of disposition default as default; if none exists, mark the first track as default.", 0, AV_OPT_TYPE_CONST, { .i64 = DEFAULT_MODE_INFER }, 0, 0, FLAGS, "default_mode" },
     { "infer_no_subs", "For each track type, mark each track of disposition default as default; for audio and video: if none exists, mark the first track as default.", 0, AV_OPT_TYPE_CONST, { .i64 = DEFAULT_MODE_INFER_NO_SUBS }, 0, 0, FLAGS, "default_mode" },
     { "passthrough", "Use the disposition flag as-is", 0, AV_OPT_TYPE_CONST, { .i64 = DEFAULT_MODE_PASSTHROUGH }, 0, 0, FLAGS, "default_mode" },
+    // PLEX
+    { "strip_dovi", "Do not write out DOVI metadata", OFFSET(strip_dovi), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
+    // PLEX
     { NULL },
 };
 
