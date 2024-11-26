@@ -947,7 +947,7 @@ int ff_qsvvpp_close(AVFilterContext *avctx)
     return 0;
 }
 
-int ff_qsvvpp_filter_frame(QSVVPPContext *s, AVFilterLink *inlink, AVFrame *picref)
+int ff_qsvvpp_filter_frame(QSVVPPContext *s, AVFilterLink *inlink, AVFrame *picref, AVFrame *propref)
 {
     AVFilterContext  *ctx     = inlink->dst;
     AVFilterLink     *outlink = ctx->outputs[0];
@@ -986,6 +986,23 @@ int ff_qsvvpp_filter_frame(QSVVPPContext *s, AVFilterLink *inlink, AVFrame *picr
             av_log(ctx, AV_LOG_ERROR, "Failed to query an output frame.\n");
             return AVERROR(ENOMEM);
         }
+        
+        /* Copy metadata before initializing vpp session,
+         * which contains callback to drop the HDR metadata */
+        if (propref) {
+            int flags = out_frame->frame->flags;
+            int64_t pkt_duration = out_frame->frame->pkt_duration;
+
+            ret1 = av_frame_copy_props(out_frame->frame, propref);
+            if (ret1 < 0) {
+                av_frame_free(&out_frame->frame);
+                av_log(ctx, AV_LOG_ERROR, "Failed to copy metadata fields from src to dst.\n");
+                return ret1;
+            }
+
+            out_frame->frame->flags = flags;
+            out_frame->frame->pkt_duration = pkt_duration;
+        }
 
         ret = qsvvpp_init_vpp_session(ctx, s, in_frame, out_frame);
         if (ret)
@@ -1004,6 +1021,7 @@ int ff_qsvvpp_filter_frame(QSVVPPContext *s, AVFilterLink *inlink, AVFrame *picr
                 return AVERROR(EAGAIN);
             break;
         }
+
         out_frame->frame->pts = av_rescale_q(out_frame->surface.Data.TimeStamp,
                                              default_tb, outlink->time_base);
 
@@ -1088,7 +1106,7 @@ int ff_qsvvpp_create_mfx_session(void *ctx,
 
     if (sts < 0)
         return ff_qsvvpp_print_error(ctx, sts,
-                                     "Error creating a MFX session");
+                                     "Error creating a MFX session");                             
     else if (sts > 0) {
         ff_qsvvpp_print_warning(ctx, sts,
                                 "Warning in MFX session creation");
