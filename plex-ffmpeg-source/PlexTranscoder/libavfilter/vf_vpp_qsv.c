@@ -402,7 +402,7 @@ static int vpp_set_frame_ext_params(AVFilterContext *ctx, const AVFrame *in, AVF
     fp->num_ext_buf = 0;
 
     if (!in || !out ||
-        !QSV_RUNTIME_VERSION_ATLEAST(qsvvpp->ver, 2, 0))
+        !QSV_RUNTIME_VERSION_ATLEAST(qsvvpp->ver, 1, 255)) // (2, 0)
         return 0;
 
     memset(&invsi_conf, 0, sizeof(mfxExtVideoSignalInfo));

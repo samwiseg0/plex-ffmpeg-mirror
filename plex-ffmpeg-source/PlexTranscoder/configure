@@ -2586,6 +2586,7 @@ HAVE_LIST="
     texi2html
     xmllint
     zlib_gzip
+    libvpl_legacy_mfxinit
 "
 
 # options emitted with CONFIG_ prefix but not available on the command line
@@ -6830,6 +6831,10 @@ elif enabled libvpl; then
 # is extracted from "vpl >= 2.6"
     check_pkg_config libmfx "vpl >= 2.6" "mfxvideo.h mfxdispatcher.h" MFXLoad || \
             die "ERROR: libvpl >= 2.6 not found"
+    add_cflags -DMFX_DEPRECATED_OFF
+# Ancient Intel driver on Windows still require the legacy init functions.
+# No compiler option is changed if the test fails, just needs to add back the disabled libmfx.
+    { test_pkg_config libmfx "vpl >= 2.6" "mfxvideo.h mfxdispatcher.h" "MFXInit MFXInitEx" && enable libvpl_legacy_mfxinit; }
 fi
 
 if enabled libmfx; then
