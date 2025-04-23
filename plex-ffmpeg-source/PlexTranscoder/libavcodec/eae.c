@@ -320,6 +320,12 @@ static int eae_decode_init(AVCodecContext *avctx)
         s->opt_eae_batch_frames = def_batch_frames;
 
     s->ext_out = "wav";
+    
+    if ((avctx->bits_per_coded_sample * avctx->ch_layout.nb_channels) % 8 != 0)
+    {
+        av_log(avctx, AV_LOG_ERROR, "Bitdepth is not supported: %d\n", avctx->bits_per_coded_sample);
+        return AVERROR_INVALIDDATA;
+    }
 
     return eae_common_init(avctx, folder);
 }
@@ -507,8 +513,7 @@ static uint32_t fourCCToInt(const char *fcc)
 
 static int eae_write_wav_header(AVCodecContext *avctx, XFILE *f, int sample_count)
 {
-    int sample_size = av_get_bytes_per_sample(avctx->sample_fmt);
-    int data_size = sample_count * sample_size * avctx->ch_layout.nb_channels;
+    int data_size = sample_count * (avctx->bits_per_coded_sample * avctx->ch_layout.nb_channels)/8;
 
     // RIFF header
     writeDWord(f, fourCCToInt("RIFF"));
@@ -523,9 +528,9 @@ static int eae_write_wav_header(AVCodecContext *avctx, XFILE *f, int sample_coun
     writeWord(f, 0xFFFE);  // wFormatTag
     writeWord(f, avctx->ch_layout.nb_channels); // nChannels
     writeDWord(f, avctx->sample_rate); // nSamplesPerSec
-    writeDWord(f, sample_size * avctx->ch_layout.nb_channels * avctx->sample_rate); // nAvgBytesPerSec
-    writeWord(f, sample_size * avctx->ch_layout.nb_channels); // nBlockAlign
-    writeWord(f, sample_size * 8); // wBitsPerSample
+    writeDWord(f, (avctx->bits_per_coded_sample * avctx->ch_layout.nb_channels)/8 * avctx->sample_rate); // nAvgBytesPerSec
+    writeWord(f, (avctx->bits_per_coded_sample * avctx->ch_layout.nb_channels)/8); // nBlockAlign
+    writeWord(f, avctx->bits_per_coded_sample); // wBitsPerSample
     writeWord(f, 22); // cbSize
 
     // WAVE_FORMAT_EXTENSIBLE
@@ -586,7 +591,7 @@ static int eae_write_input_files(AVCodecContext *avctx)
         int sample_count = 0;
 
         for (i = 0; i < s->num_buffered; i++) {
-            int bps = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels;
+            int bps = (avctx->bits_per_coded_sample * avctx->ch_layout.nb_channels)/8;
             int nb_samples = s->input[i].buffer->size / bps;
             sample_count += nb_samples;
             if (i != s->num_buffered - 1 || !s->eof) {
@@ -1013,26 +1018,35 @@ static int eae_prequeue_packet(AVCodecContext *avctx, const AVPacket *avpkt)
         if ((err = eae_parse_ac3_frame_header(avpkt->data, avpkt->size, &header, &sync)) < 0)
             return err;
 
-        if (s->num_prebuffered_samples == 0) {
-            // Discard packets until we find a sync bit.
-            if (!sync)
-                return 0;
+        // If this is a sync packet, flush all previous packets.  This can
+        // delay sending to eae by a packet but ensures that we start every
+        // file with a sync since eae throws away packets before a sync.
+        if (sync && s->num_prebuffered_samples != 0)
+        {
+          // eae expects groups of 6 blocks, this can cause issues if
+          // we ever see packets contain more than 1 block.  Since we
+          // have not seen that there is no need to add complication... yet
+          if (s->num_prebuffered_samples % (6 * 256) != 0)
+          {
+            av_log(avctx, AV_LOG_ERROR, "Cannot group in blocks of 6!\n");
+            return AVERROR_INVALIDDATA;
+          }
 
-            // A .ts sample exists that has dependent frames, followed by plain
-            // old AC3 frame. EAE will not produce any output if the input
-            // consists only of dependent frames. Passing through all frames
-            // produces artifacts, and apparently decodes _some_ of the
-            // dependent frames.
-            if (header.frame_type == EAC3_FRAME_TYPE_DEPENDENT)
-                return 0;
+          // if there was an error flushing, exit with that error, otherwise
+          // continue processing this packet
+          err = eae_flush_prebuffer_packets(avctx);
+          if (err)
+            return err;
         }
+
+        // We always want to start with a sync, discard packets until we get there
+        // (should only be relevent for seeks)
+        if (!sync && s->num_prebuffered_samples == 0)
+          return 0;
 
         if ((err = eae_merge_prebuffer_packet(avctx, avpkt)) < 0)
             return err;
         s->num_prebuffered_samples += header.num_blocks * 256;
-
-        if (s->num_prebuffered_samples >= 6 * 256)
-            return eae_flush_prebuffer_packets(avctx);
 
         return 0;
     }
@@ -1243,7 +1257,7 @@ static int eae_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 
     av_assert0(s->output_buffer);
 
-    blocksize = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels;
+    blocksize = (avctx->bits_per_raw_sample * avctx->ch_layout.nb_channels)/8;
     samples = s->output_buffer->size / blocksize;
     if (samples * blocksize != s->output_buffer->size) {
         av_log(avctx, AV_LOG_ERROR, "EAE output with odd size\n");
