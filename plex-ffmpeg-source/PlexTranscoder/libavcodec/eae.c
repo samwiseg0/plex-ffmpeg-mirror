@@ -365,6 +365,10 @@ static int eae_encode_init(AVCodecContext *avctx)
     if (!s->frame)
         return AVERROR(ENOMEM);
 
+    // if bits_per_coded_sample is not set, deduce it
+    if (avctx->bits_per_coded_sample == 0)
+      avctx->bits_per_coded_sample = av_get_bytes_per_sample(avctx->sample_fmt) * 8;
+
     return eae_common_init(avctx, folder);
 }
 
