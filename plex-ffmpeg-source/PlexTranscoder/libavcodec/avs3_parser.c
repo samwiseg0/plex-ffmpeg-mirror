@@ -71,9 +71,10 @@ static void parse_avs3_nal_units(AVCodecParserContext *s, const uint8_t *buf,
     if (buf[0] == 0x0 && buf[1] == 0x0 && buf[2] == 0x1) {
         if (buf[3] == AVS3_SEQ_START_CODE) {
             GetBitContext gb;
-            int profile, ratecode;
+            int profile, ratecode, low_delay;
 
-            init_get_bits8(&gb, buf + 4, buf_size - 4);
+            av_unused int ret = init_get_bits(&gb, buf + 4, 100);
+            av_assert1(ret >= 0);
 
             s->key_frame = 1;
             s->pict_type = AV_PICTURE_TYPE_I;
@@ -114,10 +115,11 @@ static void parse_avs3_nal_units(AVCodecParserContext *s, const uint8_t *buf,
             //            bitrate_high(12)
             skip_bits(&gb, 32);
 
-            avctx->has_b_frames = !get_bits(&gb, 1);
+            low_delay = get_bits(&gb, 1);
+            avctx->has_b_frames = FFMAX(avctx->has_b_frames, !low_delay);
 
-            avctx->framerate.num = avctx->time_base.den = ff_avs3_frame_rate_tab[ratecode].num;
-            avctx->framerate.den = avctx->time_base.num = ff_avs3_frame_rate_tab[ratecode].den;
+            avctx->framerate.num = ff_avs3_frame_rate_tab[ratecode].num;
+            avctx->framerate.den = ff_avs3_frame_rate_tab[ratecode].den;
 
             s->width  = s->coded_width = avctx->width;
             s->height = s->coded_height = avctx->height;

@@ -47,12 +47,23 @@ static const enum AVPixelFormat supported_formats[] = {
     AV_PIX_FMT_YUV444P16,
     AV_PIX_FMT_0RGB32,
     AV_PIX_FMT_0BGR32,
+    AV_PIX_FMT_RGB32,
+    AV_PIX_FMT_BGR32,
 #if CONFIG_VULKAN
     AV_PIX_FMT_VULKAN,
 #endif
 };
 
 #define CHECK_CU(x) FF_CUDA_CHECK_DL(device_ctx, cu, x)
+
+#if defined(NVDECAPI_MAJOR_VERSION) && defined(NVDECAPI_MINOR_VERSION)
+# define NVDECAPI_CHECK_VERSION(major, minor) \
+    ((major) < NVDECAPI_MAJOR_VERSION || ((major) == NVDECAPI_MAJOR_VERSION && (minor) <= NVDECAPI_MINOR_VERSION))
+#else
+/* version macros were added in SDK 8.1 ffnvcodec */
+# define NVDECAPI_CHECK_VERSION(major, minor) \
+    ((major) < 8 || ((major) == 8 && (minor) <= 0))
+#endif
 
 static int cuda_frames_get_constraints(AVHWDeviceContext *ctx,
                                        const void *hwconfig,
@@ -290,7 +301,7 @@ static void cuda_device_uninit(AVHWDeviceContext *device_ctx)
         if (hwctx->internal->is_allocated && hwctx->cuda_ctx) {
             if (hwctx->internal->flags & AV_CUDA_USE_PRIMARY_CONTEXT)
                 CHECK_CU(cu->cuDevicePrimaryCtxRelease(hwctx->internal->cuda_device));
-            else
+            else if (!(hwctx->internal->flags & AV_CUDA_USE_CURRENT_CONTEXT))
                 CHECK_CU(cu->cuCtxDestroy(hwctx->cuda_ctx));
 
             hwctx->cuda_ctx = NULL;
@@ -361,6 +372,13 @@ static int cuda_context_init(AVHWDeviceContext *device_ctx, int flags) {
                                                     hwctx->internal->cuda_device));
         if (ret < 0)
             return ret;
+#if NVDECAPI_CHECK_VERSION(12, 0)
+    } else if (flags & AV_CUDA_USE_CURRENT_CONTEXT) {
+        ret = CHECK_CU(cu->cuCtxGetCurrent(&hwctx->cuda_ctx));
+        if (ret < 0)
+            return ret;
+        av_log(device_ctx, AV_LOG_INFO, "Using current CUDA context.\n");
+#endif
     } else {
         ret = CHECK_CU(cu->cuCtxCreate(&hwctx->cuda_ctx, desired_flags,
                                        hwctx->internal->cuda_device));
@@ -382,14 +400,40 @@ static int cuda_flags_from_opts(AVHWDeviceContext *device_ctx,
                                 AVDictionary *opts, int *flags)
 {
     AVDictionaryEntry *primary_ctx_opt = av_dict_get(opts, "primary_ctx", NULL, 0);
+    
+    AVDictionaryEntry *current_ctx_opt = av_dict_get(opts, "current_ctx", NULL, 0);
+#if NVDECAPI_CHECK_VERSION(12, 0)
+    int use_primary_ctx = 0, use_current_ctx = 0;
+    if (primary_ctx_opt)
+        use_primary_ctx = strtol(primary_ctx_opt->value, NULL, 10);
 
+    if (current_ctx_opt)
+        use_current_ctx = strtol(current_ctx_opt->value, NULL, 10);
+
+    if (use_primary_ctx && use_current_ctx) {
+        av_log(device_ctx, AV_LOG_ERROR, "Requested both primary and current CUDA context simultaneously.\n");
+        return AVERROR(EINVAL);
+    }
+
+    if (primary_ctx_opt && use_primary_ctx) {
+#else
     if (primary_ctx_opt && strtol(primary_ctx_opt->value, NULL, 10)) {
+#endif
         av_log(device_ctx, AV_LOG_VERBOSE, "Using CUDA primary device context\n");
         *flags |= AV_CUDA_USE_PRIMARY_CONTEXT;
     } else if (primary_ctx_opt) {
         av_log(device_ctx, AV_LOG_VERBOSE, "Disabling use of CUDA primary device context\n");
         *flags &= ~AV_CUDA_USE_PRIMARY_CONTEXT;
     }
+#if NVDECAPI_CHECK_VERSION(12, 0)
+    if (current_ctx_opt && use_current_ctx) {
+        av_log(device_ctx, AV_LOG_VERBOSE, "Using CUDA current device context\n");
+        *flags |= AV_CUDA_USE_CURRENT_CONTEXT;
+    } else if (current_ctx_opt) {
+        av_log(device_ctx, AV_LOG_VERBOSE, "Disabling use of CUDA current device context\n");
+        *flags &= ~AV_CUDA_USE_CURRENT_CONTEXT;
+    }
+#endif
 
     return 0;
 }
@@ -427,44 +471,34 @@ static int cuda_device_create(AVHWDeviceContext *device_ctx,
         goto error;
 
     cu = hwctx->internal->cuda_dl;
-
-    if (uuid_str) {
+    
+     if (uuid_str) {
         if (!cu->cuDeviceGetUuid)
             return AVERROR(ENOSYS);
-
         ret = av_uuid_parse(uuid_str, uuid);
         if (ret < 0)
             return ret;
     }
-
 #ifdef _WIN32
     if (luid_str) {
         unsigned c;
-
         // We'll reuse some of the UUID code later
         uuid_str = luid_str;
-
         if (!cu->cuDeviceGetLuid)
             return AVERROR(ENOSYS);
-
         // Read the high part
         if (sscanf(luid_str, "%2hhx%2hhx%2hhx%2hhx%n",
                    &luid[7], &luid[6], &luid[5], &luid[4], &c) != 4)
             return AVERROR(EINVAL);
-
         if (c != 8)
             return AVERROR(EINVAL);
-
         luid_str += c;
-
         // Optionally, accept a separator between high and low
         if (*luid_str == '_')
             luid_str++;
-
         if (sscanf(luid_str, "%2hhx%2hhx%2hhx%2hhx%n:%x",
                    &luid[3], &luid[2], &luid[1], &luid[0], &c, &req_node_mask) < 4)
             return AVERROR(EINVAL);
-
         if (c != 8)
             return AVERROR(EINVAL);
     }
@@ -473,60 +507,51 @@ static int cuda_device_create(AVHWDeviceContext *device_ctx,
     ret = CHECK_CU(cu->cuInit(0));
     if (ret < 0)
         goto error;
-
-    if (pci_bus_id) {
+    
+     if (pci_bus_id) {
         ret = CHECK_CU(cu->cuDeviceGetByPCIBusId(&hwctx->internal->cuda_device, pci_bus_id));
     } else if (uuid_str) {
         int i, count;
         ret = CHECK_CU(cu->cuDeviceGetCount(&count));
         if (ret < 0)
             goto error;
-
         hwctx->internal->cuda_device = -1;
-
         for (i = 0; i < count; i++) {
             CUdevice dev;
             CUuuid dev_uuid;
-
             ret = CHECK_CU(cu->cuDeviceGet(&dev, i));
             if (ret < 0)
                 goto error;
-
 #ifdef _WIN32
             if (luid_str) {
                 char dev_luid[8];
                 unsigned dev_node_mask;
-
                 ret = CHECK_CU(cu->cuDeviceGetLuid(&dev_luid, &dev_node_mask, dev));
                 if (ret < 0)
                     goto error;
-
                 if (!memcmp(dev_luid, luid, sizeof(luid)) &&
                     (req_node_mask == UINT_MAX ||
                      req_node_mask == dev_node_mask))
                     goto found;
-
                 continue;
             }
 #endif
-
             ret = CHECK_CU(cu->cuDeviceGetUuid(&dev_uuid, dev));
             if (ret < 0)
                 goto error;
-
             if (av_uuid_equal(uuid, dev_uuid.bytes)) {
 found:
                 hwctx->internal->cuda_device = dev;
                 break;
             }
         }
-
         if (hwctx->internal->cuda_device == -1)
             ret = AVERROR(EINVAL);
     } else {
         ret = CHECK_CU(cu->cuDeviceGet(&hwctx->internal->cuda_device, device_idx));
     }
 
+    ret = CHECK_CU(cu->cuDeviceGet(&hwctx->internal->cuda_device, device_idx));
     if (ret < 0)
         goto error;
 
@@ -547,6 +572,9 @@ static int cuda_device_derive(AVHWDeviceContext *device_ctx,
     AVCUDADeviceContext *hwctx = device_ctx->hwctx;
     CudaFunctions *cu;
     const char *src_uuid = NULL;
+#if CONFIG_VULKAN
+    VkPhysicalDeviceIDProperties vk_idp;
+#endif
     int ret, i, device_count;
 
     ret = cuda_flags_from_opts(device_ctx, opts, &flags);
@@ -554,7 +582,7 @@ static int cuda_device_derive(AVHWDeviceContext *device_ctx,
         goto error;
 
 #if CONFIG_VULKAN
-    VkPhysicalDeviceIDProperties vk_idp = {
+    vk_idp = (VkPhysicalDeviceIDProperties) {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES,
     };
 #endif

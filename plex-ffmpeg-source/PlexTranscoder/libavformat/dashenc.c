@@ -22,6 +22,7 @@
 
 #include "config.h"
 #include "config_components.h"
+#include <time.h>
 #if HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -38,6 +39,8 @@
 #include "libavutil/time.h"
 #include "libavutil/time_internal.h"
 
+#include "libavcodec/avcodec.h"
+
 #include "av1.h"
 #include "avc.h"
 #include "avformat.h"
@@ -48,6 +51,7 @@
 #endif
 #include "internal.h"
 #include "isom.h"
+#include "mux.h"
 #include "os_support.h"
 #include "url.h"
 #include "vpcc.h"
@@ -57,8 +61,6 @@ typedef enum {
     SEGMENT_TYPE_AUTO = 0,
     SEGMENT_TYPE_MP4,
     SEGMENT_TYPE_WEBM,
-    SEGMENT_TYPE_WEBVTT,
-    SEGMENT_TYPE_MATROSKA,
     SEGMENT_TYPE_NB
 } SegmentType;
 
@@ -151,7 +153,6 @@ typedef struct DASHContext {
     int nb_as;
     int window_size;
     int extra_window_size;
-    int64_t time_delta; //PLEX
     int64_t seg_duration;
     int64_t frag_duration;
     int remove_at_exit;
@@ -185,6 +186,7 @@ typedef struct DASHContext {
     int master_playlist_created;
     AVIOContext *mpd_out;
     AVIOContext *m3u8_out;
+    AVIOContext *http_delete;
     int streaming;
     int64_t timeout;
     int index_correction;
@@ -194,7 +196,6 @@ typedef struct DASHContext {
     int ignore_io_errors;
     int lhls;
     int ldash;
-    int opus_mp4;
     int master_publish_rate;
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
@@ -210,29 +211,16 @@ typedef struct DASHContext {
     int64_t update_period;
 } DASHContext;
 
-static struct codec_string {
-    int id;
-    const char *str;
+static const struct codec_string {
+    enum AVCodecID id;
+    const char str[8];
 } codecs[] = {
     { AV_CODEC_ID_VP8, "vp8" },
     { AV_CODEC_ID_VP9, "vp9" },
     { AV_CODEC_ID_VORBIS, "vorbis" },
     { AV_CODEC_ID_OPUS, "opus" },
     { AV_CODEC_ID_FLAC, "flac" },
-    { AV_CODEC_ID_WEBVTT, "webvtt" },
-    { AV_CODEC_ID_ASS, "ass" },
-    { 0, NULL }
-};
-
-static struct format_string {
-    SegmentType segment_type;
-    const char *str;
-} formats[] = {
-    { SEGMENT_TYPE_AUTO, "auto" },
-    { SEGMENT_TYPE_MP4, "mp4" },
-    { SEGMENT_TYPE_WEBM, "webm" },
-    { SEGMENT_TYPE_MATROSKA, "matroska" },
-    { 0, NULL }
+    { AV_CODEC_ID_NONE }
 };
 
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
@@ -273,11 +261,12 @@ static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filenam
     }
 }
 
-static const char *get_format_str(SegmentType segment_type) {
-    int i;
-    for (i = 0; i < SEGMENT_TYPE_NB; i++)
-        if (formats[i].segment_type == segment_type)
-            return formats[i].str;
+static const char *get_format_str(SegmentType segment_type)
+{
+    switch (segment_type) {
+    case SEGMENT_TYPE_MP4:  return "mp4";
+    case SEGMENT_TYPE_WEBM: return "webm";
+    }
     return NULL;
 }
 
@@ -287,8 +276,6 @@ static const char *get_extension_str(SegmentType type, int single_file)
 
     case SEGMENT_TYPE_MP4:  return single_file ? "mp4" : "m4s";
     case SEGMENT_TYPE_WEBM: return "webm";
-    case SEGMENT_TYPE_WEBVTT: return "vtt";
-    case SEGMENT_TYPE_MATROSKA: return "mkv";
     default: return NULL;
     }
 }
@@ -308,10 +295,6 @@ static inline SegmentType select_segment_type(SegmentType segment_type, enum AVC
         if (codec_id == AV_CODEC_ID_OPUS || codec_id == AV_CODEC_ID_VORBIS ||
             codec_id == AV_CODEC_ID_VP8 || codec_id == AV_CODEC_ID_VP9) {
             segment_type = SEGMENT_TYPE_WEBM;
-        } else if (codec_id == AV_CODEC_ID_WEBVTT) {
-            segment_type = SEGMENT_TYPE_WEBVTT;
-        } else if (codec_id == AV_CODEC_ID_ASS) {
-            segment_type = SEGMENT_TYPE_MATROSKA;
         } else {
             segment_type = SEGMENT_TYPE_MP4;
         }
@@ -328,12 +311,6 @@ static int init_segment_types(AVFormatContext *s)
         OutputStream *os = &c->streams[i];
         SegmentType segment_type = select_segment_type(
             c->segment_type_option, s->streams[i]->codecpar->codec_id);
-
-        if (c->segment_type_option == SEGMENT_TYPE_AUTO &&
-            s->streams[i]->codecpar->codec_id == AV_CODEC_ID_OPUS &&
-            c->opus_mp4)
-            segment_type = SEGMENT_TYPE_MP4;
-
         os->segment_type = segment_type;
         os->format_name = get_format_str(segment_type);
         if (!os->format_name) {
@@ -360,7 +337,7 @@ static int init_segment_types(AVFormatContext *s)
 static void set_vp9_codec_str(AVFormatContext *s, AVCodecParameters *par,
                               AVRational *frame_rate, char *str, int size) {
     VPCC vpcc;
-    int ret = ff_isom_get_vpcc_features(s, par, frame_rate, &vpcc);
+    int ret = ff_isom_get_vpcc_features(s, par, NULL, 0, frame_rate, &vpcc);
     if (ret == 0) {
         av_strlcatf(str, size, "vp09.%02d.%02d.%02d",
                     vpcc.profile, vpcc.level, vpcc.bitdepth);
@@ -380,7 +357,7 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
     int i;
 
     // common Webm codecs are not part of RFC 6381
-    for (i = 0; codecs[i].id; i++)
+    for (i = 0; codecs[i].id != AV_CODEC_ID_NONE; i++)
         if (codecs[i].id == par->codec_id) {
             if (codecs[i].id == AV_CODEC_ID_VP9) {
                 set_vp9_codec_str(s, par, frame_rate, str, size);
@@ -397,7 +374,6 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
         tags[0] = ff_codec_movaudio_tags;
     else
         return;
-
 
     tag = par->codec_tag;
 
@@ -531,7 +507,7 @@ static void get_start_index_number(OutputStream *os, DASHContext *c,
     *start_number = 1;
     if (c->window_size) {
         *start_index  = FFMAX(os->nb_segments   - c->window_size, 0);
-        *start_number = FFMAX(os->segment_index - c->window_size, c->skip_to_segment);
+        *start_number = FFMAX(os->segment_index - c->window_size, c->skip_to_segment); // PLEX
     }
 }
 
@@ -671,6 +647,7 @@ static void dash_free(AVFormatContext *s)
 
     ff_format_io_close(s, &c->mpd_out);
     ff_format_io_close(s, &c->m3u8_out);
+    ff_format_io_close(s, &c->http_delete);
 }
 
 static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatContext *s,
@@ -831,7 +808,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     int i;
 
     avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" bitstreamSwitching=\"true\"",
-                as->id, as->media_type == AVMEDIA_TYPE_VIDEO ? "video" : as->media_type == AVMEDIA_TYPE_AUDIO ? "audio" : "text");
+                as->id, as->media_type == AVMEDIA_TYPE_VIDEO ? "video" : "audio");
     if (as->media_type == AVMEDIA_TYPE_VIDEO && as->max_frame_rate.num && !as->ambiguous_frame_rate && av_cmp_q(as->min_frame_rate, as->max_frame_rate) < 0)
         avio_printf(out, " maxFrameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
     else if (as->media_type == AVMEDIA_TYPE_VIDEO && as->max_frame_rate.num && !as->ambiguous_frame_rate && !av_cmp_q(as->min_frame_rate, as->max_frame_rate))
@@ -888,14 +865,11 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
             if (!os->coding_dependency)
                 avio_printf(out, " codingDependency=\"false\"");
             avio_printf(out, ">\n");
-        } else if (as->media_type == AVMEDIA_TYPE_AUDIO) {
+        } else {
             avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"audio/%s\" codecs=\"%s\"%s audioSamplingRate=\"%d\">\n",
                 i, os->format_name, os->codec_str, bandwidth_str, s->streams[i]->codecpar->sample_rate);
             avio_printf(out, "\t\t\t\t<AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"%d\" />\n",
                 s->streams[i]->codecpar->ch_layout.nb_channels);
-        } else {
-            avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"%s\" codecs=\"%s\"%s>\n",
-                i, os->ctx->oformat->mime_type, os->codec_str, bandwidth_str);
         }
         if (!final && c->write_prft && os->producer_reference_time_str[0]) {
             avio_printf(out, "\t\t\t\t<ProducerReferenceTime id=\"%d\" inband=\"true\" type=\"%s\" wallClockTime=\"%s\" presentationTime=\"%"PRId64"\">\n",
@@ -1322,7 +1296,7 @@ static int write_manifest(AVFormatContext *s, int final)
                 if (os->segment_type != SEGMENT_TYPE_MP4)
                     continue;
                 get_hls_playlist_name(playlist_file, sizeof(playlist_file), NULL, i);
-                ff_hls_write_audio_rendition(c->m3u8_out, (char *)audio_group,
+                ff_hls_write_audio_rendition(c->m3u8_out, audio_group,
                                              playlist_file, NULL, i, is_default);
                 max_audio_bitrate = FFMAX(st->codecpar->bit_rate +
                                           os->muxer_overhead, max_audio_bitrate);
@@ -1339,7 +1313,7 @@ static int write_manifest(AVFormatContext *s, int final)
                 char codec_str[128];
                 AVStream *st = s->streams[i];
                 OutputStream *os = &c->streams[i];
-                char *agroup = NULL;
+                const char *agroup = NULL;
                 int stream_bitrate = os->muxer_overhead;
                 if (os->bit_rate > 0)
                     stream_bitrate += os->bit_rate;
@@ -1353,7 +1327,7 @@ static int write_manifest(AVFormatContext *s, int final)
                     continue;
                 av_strlcpy(codec_str, os->codec_str, sizeof(codec_str));
                 if (max_audio_bitrate) {
-                    agroup = (char *)audio_group;
+                    agroup = audio_group;
                     stream_bitrate += max_audio_bitrate;
                     av_strlcat(codec_str, ",", sizeof(codec_str));
                     av_strlcat(codec_str, audio_codec_str, sizeof(codec_str));
@@ -1582,7 +1556,11 @@ static int dash_init(AVFormatContext *s)
             return AVERROR_MUXER_NOT_FOUND;
         ctx->interrupt_callback    = s->interrupt_callback;
         ctx->opaque                = s->opaque;
+#if FF_API_AVFORMAT_IO_CLOSE
+FF_DISABLE_DEPRECATION_WARNINGS
         ctx->io_close              = s->io_close;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
         ctx->io_close2             = s->io_close2;
         ctx->io_open               = s->io_open;
         ctx->strict_std_compliance = s->strict_std_compliance;
@@ -1590,18 +1568,17 @@ static int dash_init(AVFormatContext *s)
         if (!(st = avformat_new_stream(ctx, NULL)))
             return AVERROR(ENOMEM);
         avcodec_parameters_copy(st->codecpar, s->streams[i]->codecpar);
-        if ((ret = ff_stream_copy_side_data(st, s->streams[i])) < 0)
-            return ret;
         st->sample_aspect_ratio = s->streams[i]->sample_aspect_ratio;
         st->time_base = s->streams[i]->time_base;
         st->avg_frame_rate = s->streams[i]->avg_frame_rate;
         ctx->avoid_negative_ts = s->avoid_negative_ts;
         ctx->flags = s->flags;
 
+        //PLEX: unset codec_tag when it doesn't match the underlying muxer
         if (ctx->oformat->codec_tag &&
-            av_codec_get_id (ctx->oformat->codec_tag, st->codecpar->codec_tag) != st->codecpar->codec_id &&
+            av_codec_get_id(ctx->oformat->codec_tag, st->codecpar->codec_tag) != st->codecpar->codec_id &&
             av_codec_get_tag(ctx->oformat->codec_tag, st->codecpar->codec_id) != 0)
-            st->codecpar->codec_tag = 0;
+          st->codecpar->codec_tag = 0;
 
         os->parser = av_parser_init(st->codecpar->codec_id);
         if (os->parser) {
@@ -1684,7 +1661,7 @@ static int dash_init(AVFormatContext *s)
                 else
                     av_dict_set(&opts, "movflags", "+dash+delay_moov+skip_trailer", AV_DICT_APPEND);
             }
-
+            
             //PLEX
             if (c->skip_to_segment > 1)
                 av_dict_set(&opts, "movflags", "+frag_discont", AV_DICT_APPEND);
@@ -1712,7 +1689,7 @@ static int dash_init(AVFormatContext *s)
         avio_flush(ctx->pb);
 
         av_log(s, AV_LOG_VERBOSE, "Representation %d init segment will be written to: %s\n", i, filename);
-
+        
 //PLEX
         if (c->skip_to_segment > 1)
             av_opt_set_int(os->ctx, "fragments", c->skip_to_segment, AV_OPT_SEARCH_CHILDREN);
@@ -1788,18 +1765,15 @@ static int dash_write_header(AVFormatContext *s)
     int i, ret;
     for (i = 0; i < s->nb_streams; i++) {
         OutputStream *os = &c->streams[i];
-        AVStream *ist = os->ctx->streams[0];
         if ((ret = avformat_write_header(os->ctx, NULL)) < 0)
             return ret;
 
         // Flush init segment
         // Only for WebM segment, since for mp4 delay_moov is set and
         // the init segment is thus flushed after the first packets.
-        if (os->segment_type != SEGMENT_TYPE_MP4 &&
+        if (os->segment_type == SEGMENT_TYPE_WEBM &&
             (ret = flush_init_segment(s, os)) < 0)
             return ret;
-
-        avpriv_set_pts_info(s->streams[i], ist->pts_wrap_bits, ist->time_base.num, ist->time_base.den);
     }
     return ret;
 }
@@ -1908,18 +1882,18 @@ static void dashenc_delete_file(AVFormatContext *s, char *filename) {
     int http_base_proto = ff_is_http_proto(filename);
 
     if (http_base_proto) {
-        AVIOContext *out = NULL;
         AVDictionary *http_opts = NULL;
 
         set_http_options(&http_opts, c);
         av_dict_set(&http_opts, "method", "DELETE", 0);
 
-        if (dashenc_io_open(s, &out, filename, &http_opts) < 0) {
+        if (dashenc_io_open(s, &c->http_delete, filename, &http_opts) < 0) {
             av_log(s, AV_LOG_ERROR, "failed to delete %s\n", filename);
         }
-
         av_dict_free(&http_opts);
-        ff_format_io_close(s, &out);
+
+        //Nothing to write
+        dashenc_io_close(s, &c->http_delete, filename);
     } else {
         int res = ffurl_delete(filename);
         if (res < 0) {
@@ -2005,8 +1979,7 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
             if (s->streams[stream]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
                 s->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
                 continue;
-            if (s->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
-                s->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE)
+            if (s->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
                 continue;
             // Make sure we don't flush audio streams multiple times, when
             // all video streams are flushed one at a time.
@@ -2055,7 +2028,7 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
     if (c->window_size) {
         for (i = 0; i < s->nb_streams; i++) {
             OutputStream *os = &c->streams[i];
-            int remove_count = FFMAX((int64_t)os->nb_segments - c->window_size - c->extra_window_size, 0);
+            int remove_count = os->nb_segments - c->window_size - c->extra_window_size;
             if (remove_count > 0)
                 dashenc_delete_media_segments(s, os, remove_count);
         }
@@ -2198,7 +2171,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         as->max_frag_duration = FFMAX(frame_duration, as->max_frag_duration);
     }
 
-    if ((c->use_template && !c->use_timeline) || 1) { //PLEX
+     if ((c->use_template && !c->use_timeline) || 1) { //PLEX
         elapsed_duration = pkt->pts - os->first_pts;
         seg_end_duration = (int64_t) (os->segment_index - c->skip_to_segment + 1) * os->seg_duration;
     } else {
@@ -2219,7 +2192,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         os->coding_dependency |= os->parser->pict_type != AV_PICTURE_TYPE_I;
     }
 
-    if (((pkt->flags & AV_PKT_FLAG_KEY) || c->break_non_keyframes) && os->packets_written &&
+    if (((pkt->flags & AV_PKT_FLAG_KEY) || c->break_non_keyframes)  && os->packets_written && //PLEX
         (!c->has_video || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) && //PLEX
         av_compare_ts(elapsed_duration, st->time_base,
                       seg_end_duration, AV_TIME_BASE_Q) >= 0) {
@@ -2259,11 +2232,10 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         else
             os->start_pts = pkt->pts;
     }
-    int use_duration = os->ctx->streams[0]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE;
     if (os->max_pts == AV_NOPTS_VALUE)
-        os->max_pts = pkt->pts + pkt->duration * use_duration;
+        os->max_pts = pkt->pts + pkt->duration;
     else
-        os->max_pts = FFMAX(os->max_pts, pkt->pts + pkt->duration * use_duration);
+        os->max_pts = FFMAX(os->max_pts, pkt->pts + pkt->duration);
 
     if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
         os->frag_type == FRAG_TYPE_PFRAMES &&
@@ -2402,10 +2374,10 @@ static int dash_check_bitstream(AVFormatContext *s, AVStream *st,
     DASHContext *c = s->priv_data;
     OutputStream *os = &c->streams[st->index];
     AVFormatContext *oc = os->ctx;
-    if (oc->oformat->check_bitstream) {
+    if (ffofmt(oc->oformat)->check_bitstream) {
         AVStream *const ost = oc->streams[0];
         int ret;
-        ret = oc->oformat->check_bitstream(oc, ost, avpkt);
+        ret = ffofmt(oc->oformat)->check_bitstream(oc, ost, avpkt);
         if (ret == 1) {
             FFStream *const  sti = ffstream(st);
             FFStream *const osti = ffstream(ost);
@@ -2424,7 +2396,6 @@ static const AVOption options[] = {
     { "window_size", "number of segments kept in the manifest", OFFSET(window_size), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, E },
     { "extra_window_size", "number of segments kept outside of the manifest before removing from disk", OFFSET(extra_window_size), AV_OPT_TYPE_INT, { .i64 = 5 }, 0, INT_MAX, E },
     { "seg_duration", "segment duration (in seconds, fractional value can be set)", OFFSET(seg_duration), AV_OPT_TYPE_DURATION, { .i64 = 5000000 }, 0, INT_MAX, E },
-    { "time_delta", "set approximation value used for the segment times", OFFSET(time_delta), AV_OPT_TYPE_DURATION, { .i64 = 0 }, 0, INT64_MAX, E }, //PLEX
     { "frag_duration", "fragment duration (in seconds, fractional value can be set)", OFFSET(frag_duration), AV_OPT_TYPE_DURATION, { .i64 = 0 }, 0, INT_MAX, E },
     { "frag_type", "set type of interval for fragments", OFFSET(frag_type), AV_OPT_TYPE_INT, {.i64 = FRAG_TYPE_NONE }, 0, FRAG_TYPE_NB - 1, E, "frag_type"},
     { "none", "one fragment per segment", 0, AV_OPT_TYPE_CONST, {.i64 = FRAG_TYPE_NONE }, 0, UINT_MAX, E, "frag_type"},
@@ -2462,7 +2433,6 @@ static const AVOption options[] = {
     { "ignore_io_errors", "Ignore IO errors during open and write. Useful for long-duration runs with network output", OFFSET(ignore_io_errors), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "lhls", "Enable Low-latency HLS(Experimental). Adds #EXT-X-PREFETCH tag with current segment's URI", OFFSET(lhls), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "ldash", "Enable Low-latency dash. Constrains the value of a few elements", OFFSET(ldash), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
-    { "opus_mp4", "Default Opus streams to MP4 segmenting", OFFSET(opus_mp4), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "master_m3u8_publish_rate", "Publish master playlist every after this many segment intervals", OFFSET(master_publish_rate), AV_OPT_TYPE_INT, {.i64 = 0}, 0, UINT_MAX, E},
     { "write_prft", "Write producer reference time element", OFFSET(write_prft), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, E},
     { "mpd_profile", "Set profiles. Elements and values used in the manifest may be constrained by them", OFFSET(profile), AV_OPT_TYPE_FLAGS, {.i64 = MPD_PROFILE_DASH }, 0, UINT_MAX, E, "mpd_profile"},
@@ -2483,20 +2453,19 @@ static const AVClass dash_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const AVOutputFormat ff_dash_muxer = {
-    .name           = "dash",
-    .long_name      = NULL_IF_CONFIG_SMALL("DASH Muxer"),
-    .extensions     = "mpd",
+const FFOutputFormat ff_dash_muxer = {
+    .p.name          = "dash",
+    .p.long_name     = NULL_IF_CONFIG_SMALL("DASH Muxer"),
+    .p.extensions    = "mpd",
+    .p.audio_codec   = AV_CODEC_ID_AAC,
+    .p.video_codec   = AV_CODEC_ID_H264,
+    .p.flags         = AVFMT_GLOBALHEADER | AVFMT_NOFILE | AVFMT_TS_NEGATIVE,
+    .p.priv_class    = &dash_class,
     .priv_data_size = sizeof(DASHContext),
-    .audio_codec    = AV_CODEC_ID_AAC,
-    .video_codec    = AV_CODEC_ID_H264,
-    .subtitle_codec = AV_CODEC_ID_WEBVTT,
-    .flags          = AVFMT_GLOBALHEADER | AVFMT_NOFILE | AVFMT_TS_NEGATIVE,
     .init           = dash_init,
     .write_header   = dash_write_header,
     .write_packet   = dash_write_packet,
     .write_trailer  = dash_write_trailer,
     .deinit         = dash_free,
     .check_bitstream = dash_check_bitstream,
-    .priv_class     = &dash_class,
 };

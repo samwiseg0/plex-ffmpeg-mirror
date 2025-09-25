@@ -486,30 +486,20 @@ int ff_ass_split_override_codes(const ASSCodesCallbacks *callbacks, void *priv,
     const char *text = NULL;
     char new_line[2];
     int text_len = 0;
-    int drawing = 0; //PLEX
 
     while (buf && *buf) {
         if (text && callbacks->text &&
-//PLEX
-            (sscanf(buf, "\\%1[nNh]", new_line) == 1 ||
-             *buf == '{') && !drawing) {
-//PLEX
+            (sscanf(buf, "\\%1[nN]", new_line) == 1 ||
+             !strncmp(buf, "{\\", 2))) {
             callbacks->text(priv, text, text_len);
             text = NULL;
         }
-//PLEX
-        if (sscanf(buf, "\\%1[h]", new_line) == 1) {
-            callbacks->text(priv, " ", 1);
-            buf += 2;
-        } else if (sscanf(buf, "\\%1[nN]", new_line) == 1) {
-//PLEX
+        if (sscanf(buf, "\\%1[nN]", new_line) == 1) {
             if (callbacks->new_line)
                 callbacks->new_line(priv, new_line[0] == 'N');
             buf += 2;
-//PLEX
-        } else if (*buf == '{') {
-            buf += strcspn(buf, "\\}");  /* skip comments */;
-//PLEX
+        } else if (!strncmp(buf, "{\\", 2)) {
+            buf++;
             while (*buf == '\\') {
                 char style[2], c[2], sep[2], c_num[2] = "0", tmp[128] = {0};
                 unsigned int color = 0xFFFFFFFF;
@@ -520,10 +510,6 @@ int ff_ass_split_override_codes(const ASSCodesCallbacks *callbacks, void *priv,
                     len += close != -1;
                     if (callbacks->style)
                         callbacks->style(priv, style[0], close);
-//PLEX
-                } else if (sscanf(buf, "\\p%u%1[\\}]%n", &size, sep, &len) > 1) {
-                    drawing = (size > 0);
-//PLEX
                 } else if (sscanf(buf, "\\c%1[\\}]%n", sep, &len) > 0 ||
                            sscanf(buf, "\\c&H%X&%1[\\}]%n", &color, sep, &len) > 1 ||
                            sscanf(buf, "\\%1[1234]c%1[\\}]%n", c_num, sep, &len) > 1 ||
@@ -572,7 +558,7 @@ int ff_ass_split_override_codes(const ASSCodesCallbacks *callbacks, void *priv,
                 buf += len - 1;
             }
             if (*buf++ != '}')
-                goto end; //PLEX
+                return AVERROR_INVALIDDATA;
         } else {
             if (!text) {
                 text = buf;
@@ -582,8 +568,7 @@ int ff_ass_split_override_codes(const ASSCodesCallbacks *callbacks, void *priv,
             buf++;
         }
     }
-end: //PLEX
-    if (text && callbacks->text && !drawing) //PLEX
+    if (text && callbacks->text)
         callbacks->text(priv, text, text_len);
     if (callbacks->end)
         callbacks->end(priv);

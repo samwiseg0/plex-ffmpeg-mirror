@@ -35,9 +35,9 @@ static __inline__ __device__ T read_sample(const FFCUDAFrame& frame, int x, int 
 // Per-format read functions
 static __inline__ __device__ ushort3 read_p016(const FFCUDAFrame& frame, int x, int y)
 {
-    return make_ushort3(read_sample<unsigned short, 0>(frame, x,          y),
-                        read_sample<unsigned short, 1>(frame, (x & ~1),     y / 2),
-                        read_sample<unsigned short, 1>(frame, (x & ~1) + 1, y / 2));
+    return make_ushort3((read_sample<unsigned short, 0>(frame, x,          y)),
+                        (read_sample<unsigned short, 1>(frame, (x & ~1),     y / 2)),
+                        (read_sample<unsigned short, 1>(frame, (x & ~1) + 1, y / 2)));
 }
 
 static __inline__ __device__ ushort3 read_p010(const FFCUDAFrame& frame, int x, int y)
@@ -50,9 +50,9 @@ static __inline__ __device__ ushort3 read_p010(const FFCUDAFrame& frame, int x, 
 
 static __inline__ __device__ ushort3 read_yuv420p16(const FFCUDAFrame& frame, int x, int y)
 {
-    return make_ushort3(read_sample<unsigned short, 0>(frame, x,      y),
-                        read_sample<unsigned short, 1>(frame, x / 2, y / 2),
-                        read_sample<unsigned short, 2>(frame, x / 2, y / 2));
+    return make_ushort3((read_sample<unsigned short, 0>(frame, x,      y)),
+                        (read_sample<unsigned short, 1>(frame, x / 2, y / 2)),
+                        (read_sample<unsigned short, 2>(frame, x / 2, y / 2)));
 }
 
 static __inline__ __device__ ushort3 read_yuv420p10(const FFCUDAFrame& frame, int x, int y)

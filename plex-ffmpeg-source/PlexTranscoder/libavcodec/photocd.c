@@ -36,8 +36,8 @@
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_internal.h"
+#include "decode.h"
 #include "get_bits.h"
-#include "internal.h"
 #include "thread.h"
 
 typedef struct PhotoCDContext {
@@ -210,8 +210,8 @@ static av_noinline int read_hufftable(AVCodecContext *avctx, VLC *vlc)
         s->syms[j]  = sym;
     }
 
-    ff_free_vlc(vlc);
-    ret = ff_init_vlc_sparse(vlc, 12, count,
+    ff_vlc_free(vlc);
+    ret = ff_vlc_init_sparse(vlc, 12, count,
                              s->bits,  sizeof(*s->bits),  sizeof(*s->bits),
                              s->codes, sizeof(*s->codes), sizeof(*s->codes),
                              s->syms,  sizeof(*s->syms),  sizeof(*s->syms), 0);
@@ -290,13 +290,12 @@ static av_noinline int decode_huff(AVCodecContext *avctx, AVFrame *frame,
     return 0;
 }
 
-static int photocd_decode_frame(AVCodecContext *avctx, void *data,
+static int photocd_decode_frame(AVCodecContext *avctx, AVFrame *p,
                                 int *got_frame, AVPacket *avpkt)
 {
     PhotoCDContext *s = avctx->priv_data;
     const uint8_t *buf = avpkt->data;
     GetByteContext *gb = &s->gb;
-    AVFrame *p = data;
     uint8_t *ptr, *ptr1, *ptr2;
     int ret;
 
@@ -326,11 +325,14 @@ static int photocd_decode_frame(AVCodecContext *avctx, void *data,
     if (ret < 0)
         return ret;
 
+    if (avctx->skip_frame >= AVDISCARD_ALL)
+        return avpkt->size;
+
     if ((ret = ff_thread_get_buffer(avctx, p, 0)) < 0)
         return ret;
 
     p->pict_type = AV_PICTURE_TYPE_I;
-    p->key_frame = 1;
+    p->flags |= AV_FRAME_FLAG_KEY;
 
     bytestream2_init(gb, avpkt->data, avpkt->size);
 
@@ -436,7 +438,7 @@ static av_cold int photocd_decode_close(AVCodecContext *avctx)
     PhotoCDContext *s = avctx->priv_data;
 
     for (int i = 0; i < 3; i++)
-        ff_free_vlc(&s->vlc[i]);
+        ff_vlc_free(&s->vlc[i]);
 
     return 0;
 }
@@ -465,8 +467,8 @@ const FFCodec ff_photocd_decoder = {
     .p.priv_class   = &photocd_class,
     .init           = photocd_decode_init,
     .close          = photocd_decode_close,
-    .decode         = photocd_decode_frame,
+    FF_CODEC_DECODE_CB(photocd_decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Kodak Photo CD"),
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
+    .caps_internal  = FF_CODEC_CAP_SKIP_FRAME_FILL_PARAM,
+    CODEC_LONG_NAME("Kodak Photo CD"),
 };

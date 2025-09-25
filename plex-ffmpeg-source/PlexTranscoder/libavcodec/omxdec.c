@@ -27,7 +27,7 @@
 #include "codec_internal.h"
 #include "decode.h"
 
-#include "omx_common.h"
+#include "omxdec_util.h"
 
 static int omx_reconfigure_output_buffer(AVCodecContext *avctx)
 {
@@ -671,10 +671,10 @@ const FFCodec ff_##namev##_omx_decoder = { \
     .p.id             = idv, \
     .priv_data_size   = sizeof(OMXCodecContext), \
     .p.capabilities   = AV_CODEC_CAP_DELAY, \
-    .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_SETS_PKT_DTS, \
+    .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_SETS_PKT_DTS, \
     .p.priv_class     = &omx_##namev##dec_class, \
     .init             = omx_decode_init, \
-    .receive_frame    = omx_decode_receive_frame, \
+    FF_CODEC_RECEIVE_FRAME_CB(omx_decode_receive_frame), \
     .close            = omx_decode_end, \
     .flush            = omx_decode_flush, \
     .bsfs             = bsf, \

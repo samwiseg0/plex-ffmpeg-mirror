@@ -1,6 +1,6 @@
 /*
  * inlineass filter
- * Copyright (c) 2016 rcombs
+ * Copyright (c) 2025 Plex, Inc.
  *
  * This file is part of FFmpeg.
  *
@@ -24,6 +24,7 @@
 
 #include "avfilter.h"
 #include "libavcodec/avcodec.h"
+#include "libavformat/avformat.h"
 
 void avfilter_inlineass_process_header(AVFilterContext *link,
                                        AVCodecContext *dec_ctx);

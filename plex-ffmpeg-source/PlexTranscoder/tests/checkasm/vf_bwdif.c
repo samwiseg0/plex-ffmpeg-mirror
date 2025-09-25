@@ -18,105 +18,238 @@
 
 #include <string.h>
 #include "checkasm.h"
-#include "libavfilter/bwdif.h"
-#include "libavutil/intreadwrite.h"
+#include "libavfilter/bwdifdsp.h"
 #include "libavutil/mem_internal.h"
 
-#define WIDTH 64
-#define HEIGHT 16
-#define SIZE WIDTH * HEIGHT + 32
+#define WIDTH 256
 
-#define randomize_buffers(buf, size)      \
-    do {                                  \
-        int j;                            \
-        uint8_t *tmp_buf = (uint8_t*)buf; \
-        for (j = 0; j < size; j++)        \
-            tmp_buf[j] = rnd() & 0xFF;    \
+#define randomize_buffers(buf0, buf1, mask, count) \
+    for (size_t i = 0; i < count; i++) \
+        buf0[i] = buf1[i] = rnd() & mask
+
+#define randomize_overflow_check(buf0, buf1, mask, count) \
+    for (size_t i = 0; i < count; i++) \
+        buf0[i] = buf1[i] = (rnd() & 1) != 0 ? mask : 0;
+
+#define BODY(type, depth)                                                      \
+    do {                                                                       \
+        type prev0[9*WIDTH], prev1[9*WIDTH];                                   \
+        type next0[9*WIDTH], next1[9*WIDTH];                                   \
+        type cur0[9*WIDTH], cur1[9*WIDTH];                                     \
+        type dst0[WIDTH], dst1[WIDTH];                                         \
+        const int stride = WIDTH;                                              \
+        const int mask = (1<<depth)-1;                                         \
+                                                                               \
+        declare_func(void, void *dst, void *prev, void *cur, void *next,       \
+                        int w, int prefs, int mrefs, int prefs2, int mrefs2,   \
+                        int prefs3, int mrefs3, int prefs4, int mrefs4,        \
+                        int parity, int clip_max);                             \
+                                                                               \
+        randomize_buffers(prev0, prev1, mask, 9*WIDTH);                        \
+        randomize_buffers(next0, next1, mask, 9*WIDTH);                        \
+        randomize_buffers( cur0,  cur1, mask, 9*WIDTH);                        \
+                                                                               \
+        call_ref(dst0, prev0 + 4*WIDTH, cur0 + 4*WIDTH, next0 + 4*WIDTH,       \
+                WIDTH, stride, -stride, 2*stride, -2*stride,                   \
+                3*stride, -3*stride, 4*stride, -4*stride,                      \
+                0, mask);                                                      \
+        call_new(dst1, prev1 + 4*WIDTH, cur1 + 4*WIDTH, next1 + 4*WIDTH,       \
+                WIDTH, stride, -stride, 2*stride, -2*stride,                   \
+                3*stride, -3*stride, 4*stride, -4*stride,                      \
+                0, mask);                                                      \
+                                                                               \
+        if (memcmp(dst0, dst1, sizeof dst0)                                    \
+                || memcmp(prev0, prev1, sizeof prev0)                          \
+                || memcmp(next0, next1, sizeof next0)                          \
+                || memcmp( cur0,  cur1, sizeof cur0))                          \
+            fail();                                                            \
+        bench_new(dst1, prev1 + 4*WIDTH, cur1 + 4*WIDTH, next1 + 4*WIDTH,      \
+                WIDTH, stride, -stride, 2*stride, -2*stride,                   \
+                3*stride, -3*stride, 4*stride, -4*stride,                      \
+                0, mask);                                                      \
     } while (0)
 
-#define randomize_buffers_12(buf, size)    \
-    do {                                   \
-        int j;                             \
-        uint16_t *tmp_buf = (uint16_t*)buf;\
-        for (j = 0; j < size / 2; j++)     \
-            tmp_buf[j] = rnd() & 0x0FFF;   \
-    } while (0)
-
-static void check_bwdif(enum AVPixelFormat fmt, int imode, const char * report_name)
-{
-    LOCAL_ALIGNED_32(uint8_t, cur_buf,     [SIZE]);
-    LOCAL_ALIGNED_32(uint8_t, prev_buf,    [SIZE]);
-    LOCAL_ALIGNED_32(uint8_t, next_buf,    [SIZE]);
-    LOCAL_ALIGNED_32(uint8_t, dst_ref_buf, [SIZE]);
-    LOCAL_ALIGNED_32(uint8_t, dst_new_buf, [SIZE]);
-    int clip_max;
-    int w = WIDTH, refs;
-    int df;
-    int y;
-    BWDIFContext s;
-    YADIFContext *yadif = &s.yadif;
-
-    declare_func(void, void *dst, void *prev, void *cur, void *next,
-                 int w, int prefs, int mrefs, int prefs2, int mrefs2,
-                 int prefs3, int mrefs3, int prefs4, int mrefs4,
-                 int parity, int clip_max);
-
-    memset(cur_buf,     0,  SIZE);
-    memset(prev_buf,    0,  SIZE);
-    memset(next_buf,    0,  SIZE);
-    memset(dst_ref_buf, 0,  SIZE);
-    memset(dst_new_buf, 0,  SIZE);
-
-    yadif->csp = av_pix_fmt_desc_get(fmt);
-    df = (yadif->csp->comp[0].depth + 7) / 8;
-    w /= df;
-    refs = w;
-    clip_max = (1 << (yadif->csp->comp[0].depth)) - 1;
-
-    if (yadif->csp->comp[0].depth == 12) {
-        randomize_buffers_12(cur_buf,  WIDTH * HEIGHT);
-        randomize_buffers_12(prev_buf, WIDTH * HEIGHT);
-        randomize_buffers_12(next_buf, WIDTH * HEIGHT);
-    } else {
-        randomize_buffers(cur_buf,  WIDTH * HEIGHT);
-        randomize_buffers(prev_buf, WIDTH * HEIGHT);
-        randomize_buffers(next_buf, WIDTH * HEIGHT);
-    }
-
-    ff_bwdif_init(&s);
-
-    if (check_func(s.filter_line, "bwdif_%s", report_name)) {
-        for (int parity = 0; parity <= 1; parity++) {
-            for (y = 4; y < HEIGHT - 4; y++) {
-                uint8_t *prev    = &prev_buf[y * WIDTH];
-                uint8_t *cur     = &cur_buf[y * WIDTH];
-                uint8_t *next    = &next_buf[y * WIDTH];
-                uint8_t *dst_ref = &dst_ref_buf[y * WIDTH];
-                uint8_t *dst_new = &dst_new_buf[y * WIDTH];
-                call_ref(dst_ref, prev, cur, next, w,
-                         refs, -refs, refs << 1, -(refs << 1),
-                         3 * refs, -3 * refs, refs << 2, -(refs << 2),
-                         parity, clip_max);
-                call_new(dst_new, prev, cur, next, w,
-                         refs, -refs, refs << 1, -(refs << 1),
-                         3 * refs, -3 * refs, refs << 2, -(refs << 2),
-                         parity, clip_max);
-            }
-            if (memcmp(dst_new_buf, dst_ref_buf, WIDTH * HEIGHT))
-                fail();
-        }
-        bench_new(dst_new_buf + (WIDTH * 4), prev_buf + (WIDTH * 4),
-                  cur_buf + (WIDTH * 4), next_buf + (WIDTH * 4), w,
-                  refs, -refs, refs << 1, -(refs << 1),
-                  3 * refs, -3 * refs, refs << 2, -(refs << 2),
-                  0, clip_max);
-    }
-}
 void checkasm_check_vf_bwdif(void)
 {
-    check_bwdif(AV_PIX_FMT_YUV420P, 0, "8");
-    report("bwdif_8");
+    BWDIFDSPContext ctx_8, ctx_10;
 
-    check_bwdif(AV_PIX_FMT_YUV420P12, 0, "12");
-    report("bwdif_12");
+    ff_bwdif_init_filter_line(&ctx_8, 8);
+    ff_bwdif_init_filter_line(&ctx_10, 10);
+
+    if (check_func(ctx_8.filter_line, "bwdif8")) {
+        BODY(uint8_t, 8);
+        report("bwdif8");
+    }
+
+    if (check_func(ctx_10.filter_line, "bwdif10")) {
+        BODY(uint16_t, 10);
+        report("bwdif10");
+    }
+
+    if (!ctx_8.filter_line3)
+        ctx_8.filter_line3 = ff_bwdif_filter_line3_c;
+
+    {
+        LOCAL_ALIGNED_16(uint8_t, prev0, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, prev1, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, next0, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, next1, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, cur0,  [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, cur1,  [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, dst0,  [WIDTH*3]);
+        LOCAL_ALIGNED_16(uint8_t, dst1,  [WIDTH*3]);
+        const int stride = WIDTH;
+        const int mask = (1<<8)-1;
+        int parity;
+
+        for (parity = 0; parity != 2; ++parity) {
+            if (check_func(ctx_8.filter_line3, "bwdif8.line3.rnd.p%d", parity)) {
+
+                declare_func(void, void * dst1, int d_stride,
+                                          const void * prev1, const void * cur1, const void * next1, int prefs,
+                                          int w, int parity, int clip_max);
+
+                randomize_buffers(prev0, prev1, mask, 11*WIDTH);
+                randomize_buffers(next0, next1, mask, 11*WIDTH);
+                randomize_buffers( cur0,  cur1, mask, 11*WIDTH);
+
+                call_ref(dst0, stride,
+                         prev0 + stride * 4, cur0 + stride * 4, next0 + stride * 4, stride,
+                         WIDTH, parity, mask);
+                call_new(dst1, stride,
+                         prev1 + stride * 4, cur1 + stride * 4, next1 + stride * 4, stride,
+                         WIDTH, parity, mask);
+
+                if (memcmp(dst0, dst1, WIDTH*3)
+                        || memcmp(prev0, prev1, WIDTH*11)
+                        || memcmp(next0, next1, WIDTH*11)
+                        || memcmp( cur0,  cur1, WIDTH*11))
+                    fail();
+
+                bench_new(dst1, stride,
+                         prev1 + stride * 4, cur1 + stride * 4, next1 + stride * 4, stride,
+                         WIDTH, parity, mask);
+            }
+        }
+
+        // Use just 0s and ~0s to try to provoke bad cropping or overflow
+        // Parity makes no difference to this test so just test 0
+        if (check_func(ctx_8.filter_line3, "bwdif8.line3.overflow")) {
+
+            declare_func(void, void * dst1, int d_stride,
+                                      const void * prev1, const void * cur1, const void * next1, int prefs,
+                                      int w, int parity, int clip_max);
+
+            randomize_overflow_check(prev0, prev1, mask, 11*WIDTH);
+            randomize_overflow_check(next0, next1, mask, 11*WIDTH);
+            randomize_overflow_check( cur0,  cur1, mask, 11*WIDTH);
+
+            call_ref(dst0, stride,
+                     prev0 + stride * 4, cur0 + stride * 4, next0 + stride * 4, stride,
+                     WIDTH, 0, mask);
+            call_new(dst1, stride,
+                     prev1 + stride * 4, cur1 + stride * 4, next1 + stride * 4, stride,
+                     WIDTH, 0, mask);
+
+            if (memcmp(dst0, dst1, WIDTH*3)
+                    || memcmp(prev0, prev1, WIDTH*11)
+                    || memcmp(next0, next1, WIDTH*11)
+                    || memcmp( cur0,  cur1, WIDTH*11))
+                fail();
+
+            // No point to benching
+        }
+
+        report("bwdif8.line3");
+    }
+
+    {
+        LOCAL_ALIGNED_16(uint8_t, prev0, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, prev1, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, next0, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, next1, [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, cur0,  [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, cur1,  [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, dst0,  [WIDTH*3]);
+        LOCAL_ALIGNED_16(uint8_t, dst1,  [WIDTH*3]);
+        const int stride = WIDTH;
+        const int mask = (1<<8)-1;
+        int spat;
+        int parity;
+
+        for (spat = 0; spat != 2; ++spat) {
+            for (parity = 0; parity != 2; ++parity) {
+                if (check_func(ctx_8.filter_edge, "bwdif8.edge.s%d.p%d", spat, parity)) {
+
+                    declare_func(void, void *dst1, void *prev1, void *cur1, void *next1,
+                                            int w, int prefs, int mrefs, int prefs2, int mrefs2,
+                                            int parity, int clip_max, int spat);
+
+                    randomize_buffers(prev0, prev1, mask, 11*WIDTH);
+                    randomize_buffers(next0, next1, mask, 11*WIDTH);
+                    randomize_buffers( cur0,  cur1, mask, 11*WIDTH);
+                    memset(dst0, 0xba, WIDTH * 3);
+                    memset(dst1, 0xba, WIDTH * 3);
+
+                    call_ref(dst0 + stride,
+                             prev0 + stride * 4, cur0 + stride * 4, next0 + stride * 4, WIDTH,
+                             stride, -stride, stride * 2, -stride * 2,
+                             parity, mask, spat);
+                    call_new(dst1 + stride,
+                             prev1 + stride * 4, cur1 + stride * 4, next1 + stride * 4, WIDTH,
+                             stride, -stride, stride * 2, -stride * 2,
+                             parity, mask, spat);
+
+                    if (memcmp(dst0, dst1, WIDTH*3)
+                            || memcmp(prev0, prev1, WIDTH*11)
+                            || memcmp(next0, next1, WIDTH*11)
+                            || memcmp( cur0,  cur1, WIDTH*11))
+                        fail();
+
+                    bench_new(dst1 + stride,
+                             prev1 + stride * 4, cur1 + stride * 4, next1 + stride * 4, WIDTH,
+                             stride, -stride, stride * 2, -stride * 2,
+                             parity, mask, spat);
+                }
+            }
+        }
+
+        report("bwdif8.edge");
+    }
+
+    if (check_func(ctx_8.filter_intra, "bwdif8.intra")) {
+        LOCAL_ALIGNED_16(uint8_t, cur0,  [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, cur1,  [11*WIDTH]);
+        LOCAL_ALIGNED_16(uint8_t, dst0,  [WIDTH*3]);
+        LOCAL_ALIGNED_16(uint8_t, dst1,  [WIDTH*3]);
+        const int stride = WIDTH;
+        const int mask = (1<<8)-1;
+
+        declare_func(void, void *dst1, void *cur1, int w, int prefs, int mrefs,
+                     int prefs3, int mrefs3, int parity, int clip_max);
+
+        randomize_buffers( cur0,  cur1, mask, 11*WIDTH);
+        memset(dst0, 0xba, WIDTH * 3);
+        memset(dst1, 0xba, WIDTH * 3);
+
+        call_ref(dst0 + stride,
+                 cur0 + stride * 4, WIDTH,
+                 stride, -stride, stride * 3, -stride * 3,
+                 0, mask);
+        call_new(dst1 + stride,
+                 cur0 + stride * 4, WIDTH,
+                 stride, -stride, stride * 3, -stride * 3,
+                 0, mask);
+
+        if (memcmp(dst0, dst1, WIDTH*3)
+                || memcmp( cur0,  cur1, WIDTH*11))
+            fail();
+
+        bench_new(dst1 + stride,
+                  cur0 + stride * 4, WIDTH,
+                  stride, -stride, stride * 3, -stride * 3,
+                  0, mask);
+
+        report("bwdif8.intra");
+    }
 }

@@ -33,9 +33,9 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 
+#include "formats.h"
 #include "avfilter.h"
 #include "colorspace.h"
-#include "formats.h"
 #include "internal.h"
 #include "video.h"
 
@@ -190,7 +190,7 @@ static float mapsig(enum TonemapAlgorithm alg, float sig, double peak, double pa
 static void tonemap(float r_in, float g_in, float b_in,
                     float *r_out, float *g_out, float *b_out,
                     double param, double desat, double peak,
-                    const struct LumaCoefficients *coeffs,
+                    const AVLumaCoefficients *coeffs,
                     enum TonemapAlgorithm alg)
 {
     float sig, sig_orig;
@@ -202,7 +202,7 @@ static void tonemap(float r_in, float g_in, float b_in,
 
     /* desaturate to prevent unnatural colors */
     if (desat > 0) {
-        float luma = coeffs->cr * r_in + coeffs->cg * g_in + coeffs->cb * b_in;
+        float luma = av_q2d(coeffs->cr) * r_in + av_q2d(coeffs->cg) * g_in + av_q2d(coeffs->cb) * b_in;
         float overbright = FFMAX(luma - desat, 1e-6) / FFMAX(luma, 1e-6);
         *r_out = MIX(r_in, luma, overbright);
         *g_out = MIX(g_in, luma, overbright);
@@ -227,8 +227,8 @@ static void tonemap(float r_in, float g_in, float b_in,
 static void tonemap_int16(int16_t r_in, int16_t g_in, int16_t b_in,
                           int16_t *r_out, int16_t *g_out, int16_t *b_out,
                           float *lin_lut, float *tonemap_lut, uint16_t *delin_lut,
-                          const struct LumaCoefficients *coeffs,
-                          const struct LumaCoefficients *ocoeffs, double desat,
+                          const AVLumaCoefficients *coeffs,
+                          const AVLumaCoefficients *ocoeffs, double desat,
                           double (*rgb2rgb)[3][3])
 {
     int16_t sig;
@@ -255,7 +255,7 @@ static void tonemap_int16(int16_t r_in, int16_t g_in, int16_t b_in,
 
     /* desaturate to prevent unnatural colors */
     if (desat > 0) {
-        float luma = coeffs->cr * r_lin + coeffs->cg * g_lin + coeffs->cb * b_lin;
+        float luma = av_q2d(coeffs->cr) * r_lin + av_q2d(coeffs->cg) * g_lin + av_q2d(coeffs->cb) * b_lin;
         float overbright = FFMAX(luma - desat, 1e-6) / FFMAX(luma, 1e-6);
         r_lin = MIX(r_lin, luma, overbright);
         g_lin = MIX(g_lin, luma, overbright);
@@ -433,8 +433,8 @@ static int compute_tonemap_lut(TonemapContext *s)
 }
 
 static int compute_yuv_coeffs(TonemapContext *s,
-                              const struct LumaCoefficients *coeffs,
-                              const struct LumaCoefficients *ocoeffs,
+                              const AVLumaCoefficients *coeffs,
+                              const AVLumaCoefficients *ocoeffs,
                               const AVPixFmtDescriptor *idesc,
                               const AVPixFmtDescriptor *odesc,
                               enum AVColorRange irng,
@@ -481,26 +481,25 @@ static int compute_rgb_coeffs(TonemapContext *s,
                               enum AVColorPrimaries oprm)
 {
     double rgb2xyz[3][3], xyz2rgb[3][3];
-    const struct WhitepointCoefficients wp = { 0.3127, 0.3290 };
-    const struct PrimaryCoefficients *icoeff = ff_get_color_primaries(iprm);
-    const struct PrimaryCoefficients *ocoeff = ff_get_color_primaries(oprm);
+    const AVColorPrimariesDesc *in_primaries = av_csp_primaries_desc_from_id(iprm);
+    const AVColorPrimariesDesc *out_primaries = av_csp_primaries_desc_from_id(oprm);
 
-    if (!icoeff) {
+    if (!in_primaries) {
         av_log(s, AV_LOG_ERROR,
                "Unsupported input color primaries %d (%s)\n",
                iprm, av_color_primaries_name(iprm));
         return AVERROR(EINVAL);
     }
-    if (!ocoeff) {
+    if (!out_primaries) {
         av_log(s, AV_LOG_ERROR,
                "Unsupported output color primaries %d (%s)\n",
                oprm, av_color_primaries_name(oprm));
         return AVERROR(EINVAL);
     }
 
-    ff_fill_rgb2xyz_table(ocoeff, &wp, rgb2xyz);
+    ff_fill_rgb2xyz_table(&out_primaries->prim, &out_primaries->wp, rgb2xyz);
     ff_matrix_invert_3x3(rgb2xyz, xyz2rgb);
-    ff_fill_rgb2xyz_table(icoeff, &wp, rgb2xyz);
+    ff_fill_rgb2xyz_table(&in_primaries->prim, &in_primaries->wp, rgb2xyz);
     ff_matrix_mul_3x3(s->rgb2rgb_coeffs, rgb2xyz, xyz2rgb);
 
     return 0;
@@ -582,7 +581,7 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
     const AVPixFmtDescriptor *odesc = av_pix_fmt_desc_get(outlink->format);
     int ret;
     double peak = s->peak;
-    const struct LumaCoefficients *coeffs = ff_get_luma_coefficients(in->colorspace);
+    const AVLumaCoefficients *coeffs = av_csp_luma_coeffs_from_avcsp(in->colorspace);
 
     if (!desc || !odesc) {
         av_frame_free(&in);
@@ -635,7 +634,7 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
 
         if (s->coeffs != coeffs) {
             enum AVColorPrimaries iprm = in->color_primaries;
-            s->ocoeffs = ff_get_luma_coefficients(out->colorspace);
+            s->ocoeffs = av_csp_luma_coeffs_from_avcsp(out->colorspace);
             if ((ret = compute_yuv_coeffs(s, coeffs, s->ocoeffs, desc, odesc,
                  in->color_range, out->color_range)) < 0)
                 goto fail;
@@ -713,13 +712,6 @@ static const AVFilterPad tonemap_inputs[] = {
     },
 };
 
-static const AVFilterPad tonemap_outputs[] = {
-    {
-        .name         = "default",
-        .type         = AVMEDIA_TYPE_VIDEO,
-    },
-};
-
 const AVFilter ff_vf_tonemap = {
     .name            = "tonemap",
     .description     = NULL_IF_CONFIG_SMALL("Conversion to/from different dynamic ranges."),
@@ -728,7 +720,7 @@ const AVFilter ff_vf_tonemap = {
     .priv_size       = sizeof(TonemapContext),
     .priv_class      = &tonemap_class,
     FILTER_INPUTS(tonemap_inputs),
-    FILTER_OUTPUTS(tonemap_outputs),
+    FILTER_OUTPUTS(ff_video_default_filterpad),
     FILTER_QUERY_FUNC(query_formats),
     .flags           = AVFILTER_FLAG_SLICE_THREADS,
 };

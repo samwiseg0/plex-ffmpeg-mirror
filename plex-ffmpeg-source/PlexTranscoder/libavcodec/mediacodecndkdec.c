@@ -20,6 +20,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavcodec/bsf.h"
 #include "libavutil/opt.h"
 #include "libavutil/buffer_internal.h"
 #include "libavutil/avassert.h"
@@ -377,7 +378,7 @@ static av_cold void mediacodecndk_decode_flush(AVCodecContext *avctx)
         .priv_data_size = sizeof(MediaCodecNDKDecoderContext), \
         .init           = mediacodecndk_decode_init, \
         .close          = mediacodecndk_decode_close, \
-        .receive_frame  = mediacodecndk_receive_frame, \
+        FF_CODEC_RECEIVE_FRAME_CB(mediacodecndk_receive_frame), \
         .flush          = mediacodecndk_decode_flush, \
         .p.priv_class   = &ffmediacodecndk_##NAME##_dec_class, \
         .p.capabilities = AV_CODEC_CAP_DELAY, \

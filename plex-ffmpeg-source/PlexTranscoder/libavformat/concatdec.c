@@ -25,9 +25,11 @@
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/timestamp.h"
+#include "libavcodec/codec_desc.h"
 #include "libavcodec/bsf.h"
 #include "avformat.h"
 #include "avio_internal.h"
+#include "demux.h"
 #include "internal.h"
 #include "url.h"
 
@@ -55,8 +57,6 @@ typedef struct {
     AVDictionary *metadata;
     AVDictionary *options;
     int nb_streams;
-    int read_video;
-    int got_first;
 } ConcatFile;
 
 typedef struct {
@@ -71,10 +71,6 @@ typedef struct {
     ConcatMatchMode stream_match_mode;
     unsigned auto_convert;
     int segment_time_metadata;
-    int have_video;
-    int skip_before_video_key;
-    int skip_before_inpoint;
-    int offset_inout;
 } ConcatContext;
 
 static int concat_probe(const AVProbeData *probe)
@@ -185,8 +181,9 @@ static int copy_stream_props(AVStream *st, AVStream *source_st)
             if (ret < 0)
                 return ret;
         }
-        memcpy(st->codecpar->extradata, source_st->codecpar->extradata,
-               source_st->codecpar->extradata_size);
+        if (source_st->codecpar->extradata_size)
+            memcpy(st->codecpar->extradata, source_st->codecpar->extradata,
+                   source_st->codecpar->extradata_size);
         return 0;
     }
     if ((ret = avcodec_parameters_copy(st->codecpar, source_st->codecpar)) < 0)
@@ -197,7 +194,6 @@ static int copy_stream_props(AVStream *st, AVStream *source_st)
     avpriv_set_pts_info(st, 64, source_st->time_base.num, source_st->time_base.den);
 
     av_dict_copy(&st->metadata, source_st->metadata, 0);
-    ff_stream_side_data_copy(st, source_st);
     return 0;
 }
 
@@ -209,9 +205,6 @@ static int detect_stream_specific(AVFormatContext *avf, int idx)
     const AVBitStreamFilter *filter;
     AVBSFContext *bsf;
     int ret;
-
-    if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
-        cat->have_video = 1;
 
     if (cat->auto_convert && st->codecpar->codec_id == AV_CODEC_ID_H264) {
         if (!st->codecpar->extradata_size                                                ||
@@ -243,7 +236,6 @@ static int detect_stream_specific(AVFormatContext *avf, int idx)
         if (ret < 0)
             return ret;
     }
-
     return 0;
 }
 
@@ -331,9 +323,9 @@ static int64_t get_best_effort_duration(ConcatFile *file, AVFormatContext *avf)
     if (file->user_duration != AV_NOPTS_VALUE)
         return file->user_duration;
     if (file->outpoint != AV_NOPTS_VALUE)
-        return file->outpoint - file->file_inpoint;
+        return av_sat_sub64(file->outpoint, file->file_inpoint);
     if (avf->duration > 0)
-        return avf->duration - (file->file_inpoint - file->file_start_time);
+        return av_sat_sub64(avf->duration, file->file_inpoint - file->file_start_time);
     if (file->next_dts != AV_NOPTS_VALUE)
         return file->next_dts - file->file_inpoint;
     return AV_NOPTS_VALUE;
@@ -380,14 +372,8 @@ static int open_file(AVFormatContext *avf, unsigned fileno)
                        cat->files[fileno - 1].start_time +
                        cat->files[fileno - 1].duration;
     file->file_start_time = (cat->avf->start_time == AV_NOPTS_VALUE) ? 0 : cat->avf->start_time;
-    file->file_inpoint = (file->inpoint == AV_NOPTS_VALUE) ? file->file_start_time : FFMAX(file->inpoint, file->file_start_time);
+    file->file_inpoint = (file->inpoint == AV_NOPTS_VALUE) ? file->file_start_time : file->inpoint;
     file->duration = get_best_effort_duration(file, cat->avf);
-
-    av_log(avf, AV_LOG_DEBUG, "Setting duration: %s; outpoint = %s; file_inpoint = %s; start_time = %s\n",
-           av_ts2timestr(file->duration, &AV_TIME_BASE_Q),
-           av_ts2timestr(file->outpoint, &AV_TIME_BASE_Q),
-           av_ts2timestr(file->file_inpoint, &AV_TIME_BASE_Q),
-           av_ts2timestr(file->start_time, &AV_TIME_BASE_Q));
 
     if (cat->segment_time_metadata) {
         av_dict_set_int(&file->metadata, "lavf.concatdec.start_time", file->start_time, 0);
@@ -652,6 +638,17 @@ static int concat_parse_script(AVFormatContext *avf)
         }
     }
 
+    if (!file) {
+        ret = AVERROR_INVALIDDATA;
+        goto fail;
+    }
+
+    if (file->inpoint != AV_NOPTS_VALUE && file->outpoint != AV_NOPTS_VALUE) {
+        if (file->inpoint  > file->outpoint ||
+            file->outpoint - (uint64_t)file->inpoint > INT64_MAX)
+            ret = AVERROR_INVALIDDATA;
+    }
+
 fail:
     for (arg = 0; arg < MAX_ARGS; arg++)
         av_freep(&arg_str[arg]);
@@ -680,11 +677,15 @@ static int concat_read_header(AVFormatContext *avf)
         else
             time = cat->files[i].start_time;
         if (cat->files[i].user_duration == AV_NOPTS_VALUE) {
-            if (cat->files[i].inpoint == AV_NOPTS_VALUE || cat->files[i].outpoint == AV_NOPTS_VALUE)
+            if (cat->files[i].inpoint == AV_NOPTS_VALUE || cat->files[i].outpoint == AV_NOPTS_VALUE ||
+                cat->files[i].outpoint - (uint64_t)cat->files[i].inpoint != av_sat_sub64(cat->files[i].outpoint, cat->files[i].inpoint)
+            )
                 break;
             cat->files[i].user_duration = cat->files[i].outpoint - cat->files[i].inpoint;
         }
         cat->files[i].duration = cat->files[i].user_duration;
+        if (time + (uint64_t)cat->files[i].user_duration > INT64_MAX)
+            return AVERROR_INVALIDDATA;
         time += cat->files[i].user_duration;
     }
     if (i == cat->nb_files) {
@@ -738,24 +739,12 @@ static int filter_packet(AVFormatContext *avf, ConcatStream *cs, AVPacket *pkt)
     return 0;
 }
 
-/* Returns true if the packet dts is less than the specified inpoint. */
-static int packet_before_inpoint(ConcatContext *cat, AVPacket *pkt)
-{
-    int64_t delta = (cat->offset_inout ? cat->cur_file->file_start_time : 0);
-    if (cat->cur_file->inpoint != AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE) {
-        return av_compare_ts(pkt->dts, cat->avf->streams[pkt->stream_index]->time_base,
-                             cat->cur_file->inpoint + delta, AV_TIME_BASE_Q) < 0;
-    }
-    return 0;
-}
-
 /* Returns true if the packet dts is greater or equal to the specified outpoint. */
 static int packet_after_outpoint(ConcatContext *cat, AVPacket *pkt)
 {
-    int64_t delta = (cat->offset_inout ? cat->cur_file->file_start_time : 0);
     if (cat->cur_file->outpoint != AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE) {
         return av_compare_ts(pkt->dts, cat->avf->streams[pkt->stream_index]->time_base,
-                             cat->cur_file->outpoint + delta, AV_TIME_BASE_Q) >= 0;
+                             cat->cur_file->outpoint, AV_TIME_BASE_Q) >= 0;
     }
     return 0;
 }
@@ -788,10 +777,6 @@ static int concat_read_packet(AVFormatContext *avf, AVPacket *pkt)
             return ret;
         }
         if (packet_after_outpoint(cat, pkt)) {
-            av_log(avf, AV_LOG_DEBUG, "Packet after outpoint: %s > %s + %s\n",
-                   av_ts2timestr(pkt->dts, &cat->avf->streams[pkt->stream_index]->time_base),
-                   av_ts2timestr(cat->cur_file->outpoint, &AV_TIME_BASE_Q),
-                   av_ts2timestr(cat->cur_file->file_start_time, &AV_TIME_BASE_Q));
             av_packet_unref(pkt);
             if ((ret = open_next_file(avf)) < 0)
                 return ret;
@@ -802,34 +787,6 @@ static int concat_read_packet(AVFormatContext *avf, AVPacket *pkt)
             av_packet_unref(pkt);
             continue;
         }
-
-        //PLEX
-        if (cat->skip_before_inpoint && packet_before_inpoint(cat, pkt) && !cat->cur_file->got_first) {
-            av_log(avf, AV_LOG_VERBOSE, "Skipping packet before in point\n");
-            av_packet_unref(pkt);
-            continue;
-        }
-        if (cat->avf->streams[pkt->stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
-            (pkt->flags & AV_PKT_FLAG_KEY))
-            cat->cur_file->read_video = 1;
-        if (cat->skip_before_video_key && !cat->cur_file->read_video && cat->have_video) {
-            av_log(avf, AV_LOG_VERBOSE, "Skipping initial %s packet\n",
-                   av_get_media_type_string(cat->avf->streams[pkt->stream_index]->codecpar->codec_type));
-            av_packet_unref(pkt);
-            continue;
-        }
-        if ((cat->skip_before_inpoint || cat->skip_before_video_key) && !cat->cur_file->got_first) {
-            av_log(avf, AV_LOG_DEBUG, "Updating file inpoint: %s -> ", av_ts2timestr(cat->cur_file->file_inpoint, &AV_TIME_BASE_Q));
-            cat->cur_file->file_inpoint = av_rescale_q(pkt->dts, cat->avf->streams[pkt->stream_index]->time_base, AV_TIME_BASE_Q);
-            av_log(avf, AV_LOG_DEBUG, "%s; start time = %s; outpoint = %s\n", av_ts2timestr(cat->cur_file->file_inpoint, &AV_TIME_BASE_Q),
-                   av_ts2timestr(cat->cur_file->start_time, &AV_TIME_BASE_Q),
-                   av_ts2timestr(cat->cur_file->outpoint, &AV_TIME_BASE_Q));
-            if (cat->cur_file->outpoint != AV_NOPTS_VALUE)
-                cat->cur_file->duration = cat->cur_file->outpoint + cat->cur_file->file_start_time - cat->cur_file->file_inpoint;
-            cat->cur_file->got_first = 1;
-        }
-        //PLEX
-
         break;
     }
     if ((ret = filter_packet(avf, cs, pkt)) < 0)
@@ -981,12 +938,6 @@ static const AVOption options[] = {
       OFFSET(auto_convert), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, DEC },
     { "segment_time_metadata", "output file segment start time and duration as packet metadata",
       OFFSET(segment_time_metadata), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DEC },
-    { "skip_before_video_key", "skip packets before the first video keyframe",
-      OFFSET(skip_before_video_key), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DEC },
-    { "skip_before_inpoint", "skip packets before the target point (more precise seeking)",
-      OFFSET(skip_before_inpoint), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DEC },
-    { "offset_inout", "offset in/out points by the file's start time",
-      OFFSET(offset_inout), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DEC },
     { NULL }
 };
 

@@ -118,6 +118,14 @@ static av_cold int init(AVFilterContext *ctx)
     if (ret < 0)
         goto fail;
 
+    if (pan->nb_output_channels > MAX_CHANNELS) {
+        av_log(ctx, AV_LOG_ERROR,
+               "af_pan supports a maximum of %d channels. "
+               "Feel free to ask for a higher limit.\n", MAX_CHANNELS);
+        ret = AVERROR_PATCHWELCOME;
+        goto fail;
+    }
+
     /* parse channel specifications */
     while ((arg = arg0 = av_strtok(NULL, "|", &tokenizer))) {
         int used_in_ch[MAX_CHANNELS] = {0};
@@ -165,7 +173,7 @@ static av_cold int init(AVFilterContext *ctx)
         sign = 1;
         while (1) {
             gain = 1;
-            if (sscanf(arg, "%lf%n *%n", &gain, &len, &len))
+            if (sscanf(arg, "%lf%n *%n", &gain, &len, &len) >= 1)
                 arg += len;
             if (parse_channel_name(&arg, &in_ch_id, &named)){
                 av_log(ctx, AV_LOG_ERROR,
@@ -313,7 +321,7 @@ static int config_props(AVFilterLink *link)
             pan->channel_map[i] = ch_id;
         }
 
-        av_opt_set_int(pan->swr, "uch", pan->nb_output_channels, 0);
+        av_opt_set_chlayout(pan->swr, "uchl", &pan->out_channel_layout, 0);
         swr_set_channel_mapping(pan->swr, pan->channel_map);
     } else {
         // renormalize
@@ -385,12 +393,14 @@ FF_DISABLE_DEPRECATION_WARNINGS
     outsamples->channels = outlink->ch_layout.nb_channels;
 FF_ENABLE_DEPRECATION_WARNINGS
 #endif
-    if ((ret = av_channel_layout_copy(&outsamples->ch_layout, &outlink->ch_layout)) < 0)
+    if ((ret = av_channel_layout_copy(&outsamples->ch_layout, &outlink->ch_layout)) < 0) {
+        av_frame_free(&outsamples);
+        av_frame_free(&insamples);
         return ret;
+    }
 
-    ret = ff_filter_frame(outlink, outsamples);
     av_frame_free(&insamples);
-    return ret;
+    return ff_filter_frame(outlink, outsamples);
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
@@ -417,13 +427,6 @@ static const AVFilterPad pan_inputs[] = {
     },
 };
 
-static const AVFilterPad pan_outputs[] = {
-    {
-        .name = "default",
-        .type = AVMEDIA_TYPE_AUDIO,
-    },
-};
-
 const AVFilter ff_af_pan = {
     .name          = "pan",
     .description   = NULL_IF_CONFIG_SMALL("Remix channels with coefficients (panning)."),
@@ -432,6 +435,6 @@ const AVFilter ff_af_pan = {
     .init          = init,
     .uninit        = uninit,
     FILTER_INPUTS(pan_inputs),
-    FILTER_OUTPUTS(pan_outputs),
+    FILTER_OUTPUTS(ff_audio_default_filterpad),
     FILTER_QUERY_FUNC(query_formats),
 };

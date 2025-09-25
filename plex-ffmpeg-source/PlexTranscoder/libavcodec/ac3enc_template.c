@@ -36,9 +36,7 @@
 
 #include "audiodsp.h"
 #include "ac3enc.h"
-#if CONFIG_EAC3_ENCODER
 #include "eac3enc.h"
-#endif
 
 
 static int allocate_sample_buffers(AC3EncodeContext *s)
@@ -100,8 +98,8 @@ static void apply_mdct(AC3EncodeContext *s)
                                          &input_samples[AC3_BLOCK_SIZE],
                                          s->mdct_window, AC3_BLOCK_SIZE);
 
-            s->mdct.mdct_calc(&s->mdct, block->mdct_coef[ch+1],
-                              s->windowed_samples);
+            s->tx_fn(s->tx, block->mdct_coef[ch+1],
+                     s->windowed_samples, sizeof(float));
         }
     }
 }
@@ -310,10 +308,8 @@ static void apply_channel_coupling(AC3EncodeContext *s)
         }
     }
 
-#if CONFIG_EAC3_ENCODER
     if (AC3ENC_FLOAT && CONFIG_EAC3_ENCODER && s->eac3)
         ff_eac3_set_cpl_states(s);
-#endif
 }
 
 

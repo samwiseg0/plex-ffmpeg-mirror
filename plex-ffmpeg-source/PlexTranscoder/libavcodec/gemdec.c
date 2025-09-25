@@ -27,7 +27,7 @@
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 
 static const uint32_t gem_color_palette[16]={
     0xFFFFFFFF, 0xFFFF0000, 0xFF00FF00, 0xFFFFFF00,
@@ -85,14 +85,12 @@ static void put_lines_bytes(AVCodecContext *avctx, int planes, int row_width, in
     state->vdup = 1;
 }
 
-static int gem_decode_frame(AVCodecContext *avctx,
-                            void *data, int *got_frame,
-                            AVPacket *avpkt)
+static int gem_decode_frame(AVCodecContext *avctx, AVFrame *p,
+                            int *got_frame, AVPacket *avpkt)
 {
     const uint8_t *buf     = avpkt->data;
     int buf_size           = avpkt->size;
     const uint8_t *buf_end = buf + buf_size;
-    AVFrame *p             = data;
     int header_size, planes, pattern_size, tag = 0, count_scalar = 1, ret;
     unsigned int x, count, v;
     GetByteContext gb;
@@ -182,8 +180,12 @@ static int gem_decode_frame(AVCodecContext *avctx,
         return ret;
 
     p->pict_type = AV_PICTURE_TYPE_I;
-    p->key_frame = 1;
+    p->flags |= AV_FRAME_FLAG_KEY;
+#if FF_API_PALETTE_HAS_CHANGED
+FF_DISABLE_DEPRECATION_WARNINGS
     p->palette_has_changed = 1;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
     palette = (uint32_t  *)p->data[1];
 
     if (tag == AV_RB32("STTT")) {
@@ -354,10 +356,10 @@ static av_cold int gem_close(AVCodecContext *avctx)
 
 const FFCodec ff_gem_decoder = {
     .p.name         = "gem",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("GEM Raster image"),
+    CODEC_LONG_NAME("GEM Raster image"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_GEM,
     .p.capabilities = AV_CODEC_CAP_DR1,
-    .decode         = gem_decode_frame,
+    FF_CODEC_DECODE_CB(gem_decode_frame),
     .close          = gem_close,
 };

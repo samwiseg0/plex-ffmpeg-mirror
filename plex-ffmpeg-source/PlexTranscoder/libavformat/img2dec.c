@@ -25,6 +25,7 @@
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #include <sys/stat.h>
+#include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
 #include "libavutil/log.h"
 #include "libavutil/opt.h"
@@ -36,7 +37,10 @@
 #include "avio_internal.h"
 #include "internal.h"
 #include "img2.h"
+#include "os_support.h"
+#include "libavcodec/jpegxl_parse.h"
 #include "libavcodec/mjpeg.h"
+#include "libavcodec/vbn.h"
 #include "libavcodec/xwd.h"
 #include "subtitles.h"
 
@@ -499,6 +503,7 @@ int ff_img_read_packet(AVFormatContext *s1, AVPacket *pkt)
     pkt->flags       |= AV_PKT_FLAG_KEY;
     if (s->ts_from_file) {
         struct stat img_stat;
+        av_assert0(!s->is_pipe); // The ts_from_file option is not supported by piped input demuxers
         if (stat(filename, &img_stat)) {
             res = AVERROR(EIO);
             goto fail;
@@ -556,6 +561,7 @@ int ff_img_read_packet(AVFormatContext *s1, AVPacket *pkt)
         }
         goto fail;
     } else {
+        memset(pkt->data + pkt->size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
         s->img_count++;
         s->img_number++;
         s->pts++;
@@ -789,13 +795,14 @@ static int jpeg_probe(const AVProbeData *p)
                 return 0;
             state = EOI;
             break;
-        case DQT:
         case APP0:
-            if (AV_RL32(&b[i + 4]) == MKTAG('J','F','I','F'))
+            if (c == APP0 && AV_RL32(&b[i + 4]) == MKTAG('J','F','I','F'))
                 got_header = 1;
+            /* fallthrough */
         case APP1:
-            if (AV_RL32(&b[i + 4]) == MKTAG('E','x','i','f'))
+            if (c == APP1 && AV_RL32(&b[i + 4]) == MKTAG('E','x','i','f'))
                 got_header = 1;
+            /* fallthrough */
         case APP2:
         case APP3:
         case APP4:
@@ -810,6 +817,7 @@ static int jpeg_probe(const AVProbeData *p)
         case APP13:
         case APP14:
         case APP15:
+        case DQT: /* fallthrough */
         case COM:
             i += AV_RB16(&b[i + 2]) + 1;
             break;
@@ -833,6 +841,24 @@ static int jpegls_probe(const AVProbeData *p)
 
     if (AV_RB32(b) == 0xffd8fff7)
          return AVPROBE_SCORE_EXTENSION + 1;
+    return 0;
+}
+
+static int jpegxl_probe(const AVProbeData *p)
+{
+    const uint8_t *b = p->buf;
+
+    /* ISOBMFF-based container */
+    /* 0x4a584c20 == "JXL " */
+    if (AV_RL64(b) == FF_JPEGXL_CONTAINER_SIGNATURE_LE)
+        return AVPROBE_SCORE_EXTENSION + 1;
+    /* Raw codestreams all start with 0xff0a */
+    if (AV_RL16(b) != FF_JPEGXL_CODESTREAM_SIGNATURE_LE)
+        return 0;
+#if CONFIG_IMAGE_JPEGXL_PIPE_DEMUXER
+    if (ff_jpegxl_parse_codestream_header(p->buf, p->buf_size, NULL, 5) >= 0)
+        return AVPROBE_SCORE_MAX - 2;
+#endif
     return 0;
 }
 
@@ -944,8 +970,13 @@ static int svg_probe(const AVProbeData *p)
 {
     const uint8_t *b = p->buf;
     const uint8_t *end = p->buf + p->buf_size;
-
-    if (memcmp(p->buf, "<?xml", 5))
+    while (b < end && av_isspace(*b))
+        b++;
+    if (b >= end - 5)
+        return 0;
+    if (!memcmp(b, "<svg", 4))
+        return AVPROBE_SCORE_EXTENSION + 1;
+    if (memcmp(p->buf, "<?xml", 5) && memcmp(b, "<!--", 4))
         return 0;
     while (b < end) {
         int inc = ff_subtitles_next_line(b);
@@ -1000,7 +1031,19 @@ static inline int pnm_probe(const AVProbeData *p)
 
 static int pbm_probe(const AVProbeData *p)
 {
-    return pnm_magic_check(p, 1) || pnm_magic_check(p, 4) || pnm_magic_check(p, 22) || pnm_magic_check(p, 54) ? pnm_probe(p) : 0;
+    return pnm_magic_check(p, 1) || pnm_magic_check(p, 4) ? pnm_probe(p) : 0;
+}
+
+static int pfm_probe(const AVProbeData *p)
+{
+    return pnm_magic_check(p, 'F' - '0') ||
+           pnm_magic_check(p, 'f' - '0') ? pnm_probe(p) : 0;
+}
+
+static int phm_probe(const AVProbeData *p)
+{
+    return pnm_magic_check(p, 'H' - '0') ||
+           pnm_magic_check(p, 'h' - '0') ? pnm_probe(p) : 0;
 }
 
 static inline int pgmx_probe(const AVProbeData *p)
@@ -1036,6 +1079,13 @@ static int ppm_probe(const AVProbeData *p)
 static int pam_probe(const AVProbeData *p)
 {
     return pnm_magic_check(p, 7) ? pnm_probe(p) : 0;
+}
+
+static int hdr_probe(const AVProbeData *p)
+{
+    if (!memcmp(p->buf, "#?RADIANCE\n", 11))
+        return AVPROBE_SCORE_MAX;
+    return 0;
 }
 
 static int xbm_probe(const AVProbeData *p)
@@ -1111,6 +1161,23 @@ static int photocd_probe(const AVProbeData *p)
     return AVPROBE_SCORE_MAX - 1;
 }
 
+static int qoi_probe(const AVProbeData *p)
+{
+    if (memcmp(p->buf, "qoif", 4))
+        return 0;
+
+    if (AV_RB32(p->buf + 4) == 0 || AV_RB32(p->buf + 8) == 0)
+        return 0;
+
+    if (p->buf[12] != 3 && p->buf[12] != 4)
+        return 0;
+
+    if (p->buf[13] > 1)
+        return 0;
+
+    return AVPROBE_SCORE_MAX - 1;
+}
+
 static int gem_probe(const AVProbeData *p)
 {
     const uint8_t *b = p->buf;
@@ -1128,6 +1195,16 @@ static int gem_probe(const AVProbeData *p)
             return AVPROBE_SCORE_EXTENSION + 1;
         return AVPROBE_SCORE_EXTENSION / 4;
     }
+    return 0;
+}
+
+static int vbn_probe(const AVProbeData *p)
+{
+    const uint8_t *b = p->buf;
+    if (AV_RL32(b    ) == VBN_MAGIC &&
+        AV_RL32(b + 4) == VBN_MAJOR &&
+        AV_RL32(b + 8) == VBN_MINOR)
+        return AVPROBE_SCORE_MAX - 1;
     return 0;
 }
 
@@ -1162,25 +1239,31 @@ IMAGEAUTO_DEMUXER(dpx,       DPX)
 IMAGEAUTO_DEMUXER(exr,       EXR)
 IMAGEAUTO_DEMUXER(gem,       GEM)
 IMAGEAUTO_DEMUXER(gif,       GIF)
+IMAGEAUTO_DEMUXER_EXT(hdr,   RADIANCE_HDR, HDR)
 IMAGEAUTO_DEMUXER_EXT(j2k,   JPEG2000, J2K)
 IMAGEAUTO_DEMUXER_EXT(jpeg,  MJPEG, JPEG)
 IMAGEAUTO_DEMUXER(jpegls,    JPEGLS)
+IMAGEAUTO_DEMUXER(jpegxl,    JPEGXL)
 IMAGEAUTO_DEMUXER(pam,       PAM)
 IMAGEAUTO_DEMUXER(pbm,       PBM)
 IMAGEAUTO_DEMUXER(pcx,       PCX)
+IMAGEAUTO_DEMUXER(pfm,       PFM)
 IMAGEAUTO_DEMUXER(pgm,       PGM)
 IMAGEAUTO_DEMUXER(pgmyuv,    PGMYUV)
 IMAGEAUTO_DEMUXER(pgx,       PGX)
+IMAGEAUTO_DEMUXER(phm,       PHM)
 IMAGEAUTO_DEMUXER(photocd,   PHOTOCD)
 IMAGEAUTO_DEMUXER(pictor,    PICTOR)
 IMAGEAUTO_DEMUXER(png,       PNG)
 IMAGEAUTO_DEMUXER(ppm,       PPM)
 IMAGEAUTO_DEMUXER(psd,       PSD)
 IMAGEAUTO_DEMUXER(qdraw,     QDRAW)
+IMAGEAUTO_DEMUXER(qoi,       QOI)
 IMAGEAUTO_DEMUXER(sgi,       SGI)
 IMAGEAUTO_DEMUXER(sunrast,   SUNRAST)
 IMAGEAUTO_DEMUXER(svg,       SVG)
 IMAGEAUTO_DEMUXER(tiff,      TIFF)
+IMAGEAUTO_DEMUXER(vbn,       VBN)
 IMAGEAUTO_DEMUXER(webp,      WEBP)
 IMAGEAUTO_DEMUXER(xbm,       XBM)
 IMAGEAUTO_DEMUXER(xpm,       XPM)

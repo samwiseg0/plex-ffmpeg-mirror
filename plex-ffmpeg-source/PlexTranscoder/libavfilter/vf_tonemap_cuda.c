@@ -247,23 +247,19 @@ static av_cold int init_processing_chain(AVFilterContext *ctx, AVFilterLink *out
     return 0;
 }
 
-static const struct PrimaryCoefficients primaries_table[AVCOL_PRI_NB] = {
-    [AVCOL_PRI_BT709]  = { 0.640, 0.330, 0.300, 0.600, 0.150, 0.060 },
-    [AVCOL_PRI_BT2020] = { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046 },
-};
-
-static const struct WhitepointCoefficients whitepoint_table[AVCOL_PRI_NB] = {
-    [AVCOL_PRI_BT709]  = { 0.3127, 0.3290 },
-    [AVCOL_PRI_BT2020] = { 0.3127, 0.3290 },
-};
-
 static int get_rgb2rgb_matrix(enum AVColorPrimaries in, enum AVColorPrimaries out,
                               double rgb2rgb[3][3]) {
     double rgb2xyz[3][3], xyz2rgb[3][3];
 
-    ff_fill_rgb2xyz_table(&primaries_table[out], &whitepoint_table[out], rgb2xyz);
+    const AVColorPrimariesDesc *in_primaries = av_csp_primaries_desc_from_id(in);
+    const AVColorPrimariesDesc *out_primaries = av_csp_primaries_desc_from_id(out);
+
+    if (!in_primaries || !out_primaries)
+        return AVERROR(EINVAL);
+
+    ff_fill_rgb2xyz_table(&out_primaries->prim, &out_primaries->wp, rgb2xyz);
     ff_matrix_invert_3x3(rgb2xyz, xyz2rgb);
-    ff_fill_rgb2xyz_table(&primaries_table[in], &whitepoint_table[in], rgb2xyz);
+    ff_fill_rgb2xyz_table(&in_primaries->prim, &in_primaries->wp, rgb2xyz);
     ff_matrix_mul_3x3(rgb2rgb, rgb2xyz, xyz2rgb);
 
     return 0;
@@ -281,7 +277,7 @@ static av_cold int compile(AVFilterLink *inlink)
     void *cubin;
     size_t cubin_size;
     double rgb_matrix[3][3], yuv_matrix[3][3], rgb2rgb_matrix[3][3];
-    const struct LumaCoefficients *in_coeffs, *out_coeffs;
+    const AVLumaCoefficients *in_coeffs, *out_coeffs;
     enum AVColorSpace in_spc = s->in_spc, out_spc = s->in_spc;
     enum AVColorPrimaries in_pri = s->in_pri, out_pri = s->out_pri;
     enum AVColorTransferCharacteristic in_trc = s->in_trc, out_trc = s->out_trc;
@@ -307,13 +303,13 @@ static av_cold int compile(AVFilterLink *inlink)
     if (out_trc == AVCOL_TRC_UNSPECIFIED)
         out_trc = AVCOL_TRC_BT709;
 
-    if (!(in_coeffs = ff_get_luma_coefficients(in_spc)))
+    if (!(in_coeffs = av_csp_luma_coeffs_from_avcsp(in_spc)))
         return AVERROR(EINVAL);
 
     ff_fill_rgb2yuv_table(in_coeffs, yuv_matrix);
     ff_matrix_invert_3x3(yuv_matrix, rgb_matrix);
 
-    if (!(out_coeffs = ff_get_luma_coefficients(out_spc)))
+    if (!(out_coeffs = av_csp_luma_coeffs_from_avcsp(out_spc)))
         return AVERROR(EINVAL);
 
     ff_fill_rgb2yuv_table(out_coeffs, yuv_matrix);

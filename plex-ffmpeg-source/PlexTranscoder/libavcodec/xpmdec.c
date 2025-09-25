@@ -21,11 +21,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/parseutils.h"
 #include "libavutil/avstring.h"
 #include "avcodec.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 
 #define MIN_ELEMENT ' '
 #define MAX_ELEMENT 0xfe
@@ -303,11 +302,10 @@ static int ascii2index(const uint8_t *cpixel, int cpp)
     return n;
 }
 
-static int xpm_decode_frame(AVCodecContext *avctx, void *data,
+static int xpm_decode_frame(AVCodecContext *avctx, AVFrame *p,
                             int *got_frame, AVPacket *avpkt)
 {
     XPMDecContext *x = avctx->priv_data;
-    AVFrame *p=data;
     const uint8_t *end, *ptr;
     int ncolors, cpp, ret, i, j;
     int64_t size;
@@ -356,11 +354,17 @@ static int xpm_decode_frame(AVCodecContext *avctx, void *data,
         return AVERROR_INVALIDDATA;
     }
 
+    if (size > SIZE_MAX / 4)
+        return AVERROR(ENOMEM);
+
     size *= 4;
 
     ptr += mod_strcspn(ptr, ",") + 1;
     if (end - ptr < 1)
         return AVERROR_INVALIDDATA;
+
+    if (avctx->skip_frame >= AVDISCARD_ALL)
+        return avpkt->size;
 
     if ((ret = ff_get_buffer(avctx, p, 0)) < 0)
         return ret;
@@ -418,7 +422,7 @@ static int xpm_decode_frame(AVCodecContext *avctx, void *data,
         ptr += mod_strcspn(ptr, ",") + 1;
     }
 
-    p->key_frame = 1;
+    p->flags |= AV_FRAME_FLAG_KEY;
     p->pict_type = AV_PICTURE_TYPE_I;
 
     *got_frame = 1;
@@ -439,11 +443,12 @@ static av_cold int xpm_decode_close(AVCodecContext *avctx)
 
 const FFCodec ff_xpm_decoder = {
     .p.name         = "xpm",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("XPM (X PixMap) image"),
+    CODEC_LONG_NAME("XPM (X PixMap) image"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_XPM,
     .p.capabilities = AV_CODEC_CAP_DR1,
     .priv_data_size = sizeof(XPMDecContext),
     .close          = xpm_decode_close,
-    .decode         = xpm_decode_frame,
+    .caps_internal  = FF_CODEC_CAP_SKIP_FRAME_FILL_PARAM,
+    FF_CODEC_DECODE_CB(xpm_decode_frame),
 };

@@ -70,9 +70,9 @@ static const AVClass framedrop_class = {
     .version    = LIBAVUTIL_VERSION_MAJOR,
 };
 
-const AVBitStreamFilter ff_framedrop_bsf = {
-    .name           = "framedrop",
+const FFBitStreamFilter ff_framedrop_bsf = {
+    .p.name           = "framedrop",
     .priv_data_size = sizeof(FrameDropBSFContext),
-    .priv_class     = &framedrop_class,
+    .p.priv_class     = &framedrop_class,
     .filter         = framedrop_filter,
 };

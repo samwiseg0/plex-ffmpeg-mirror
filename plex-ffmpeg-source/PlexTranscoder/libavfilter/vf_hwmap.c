@@ -153,9 +153,9 @@ static int hwmap_config_output(AVFilterLink *outlink)
             
 #if CONFIG_QSVVPP
             if (frames->format == AV_PIX_FMT_QSV) {
-                AVHWDeviceContext *qsv_ctx = (AVHWDeviceContext *)frames;
+                AVHWDeviceContext *qsv_ctx = frames->device_ctx;
                 if (!ff_qsvvpp_check_dynamic_pool_supported(qsv_ctx)) {
-                    frames->initial_pool_size = 0;
+                  frames->initial_pool_size = 0;
                 }
             }
 #endif
@@ -243,7 +243,7 @@ static int hwmap_config_output(AVFilterLink *outlink)
         
 #if CONFIG_QSVVPP
             if (hwfc->format == AV_PIX_FMT_QSV) {
-                AVHWDeviceContext *qsv_ctx = (AVHWDeviceContext *)hwfc;
+                AVHWDeviceContext *qsv_ctx = hwfc->device_ctx;
                 if (!ff_qsvvpp_check_dynamic_pool_supported(qsv_ctx)) {
                     hwfc->initial_pool_size = 0;
                 }
@@ -449,4 +449,5 @@ const AVFilter ff_vf_hwmap = {
     FILTER_OUTPUTS(hwmap_outputs),
     FILTER_QUERY_FUNC(hwmap_query_formats),
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
+    .flags          = AVFILTER_FLAG_HWDEVICE,
 };

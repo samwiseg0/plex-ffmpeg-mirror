@@ -19,6 +19,7 @@
 #define _WIN32_WINNT 0x0601
 
 #include "avcodec.h"
+#include "bsf.h"
 #include "codec_internal.h"
 #include "decode.h"
 #include "libavutil/avassert.h"
@@ -26,6 +27,7 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 #include "mf_utils.h"
+#include "compat/w32dlfcn.h"
 
 // Include after mf_utils.h due to Windows include mess.
 #include "mpeg4audio.h"
@@ -39,6 +41,8 @@ typedef struct MFDecoder {
 
 typedef struct MFContext {
     AVClass *av_class;
+    HMODULE library;
+    MFFunctions functions;
     int is_dec, is_enc, is_video, is_audio;
     GUID main_subtype;
     IMFTransform *mft;
@@ -179,7 +183,7 @@ static IMFSample *mf_avpacket_to_sample(AVCodecContext *avctx, const AVPacket *a
         av_packet_unref(&tmp2);
     }
 
-    sample = ff_create_memory_sample(tmp.data, tmp.size, c->in_info.cbAlignment);
+    sample = ff_create_memory_sample(&c->functions, tmp.data, tmp.size, c->in_info.cbAlignment);
     if (sample) {
         int64_t pts = avpkt->pts;
         if (pts == AV_NOPTS_VALUE)
@@ -653,7 +657,7 @@ static int mf_receive_sample(AVCodecContext *avctx, IMFSample **out_sample)
         }
 
         if (!c->out_stream_provides_samples) {
-            sample = ff_create_memory_sample(NULL, c->out_info.cbSize, c->out_info.cbAlignment);
+            sample = ff_create_memory_sample(&c->functions, NULL, c->out_info.cbSize, c->out_info.cbAlignment);
             if (!sample)
                 return AVERROR(ENOMEM);
         }
@@ -1234,7 +1238,7 @@ static int mf_choose_output_type(AVCodecContext *avctx)
     if (out_type) {
         av_log(avctx, AV_LOG_VERBOSE, "picking output type %d.\n", out_type_index);
     } else {
-        hr = MFCreateMediaType(&out_type);
+        hr = c->functions.MFCreateMediaType(&out_type);
         if (FAILED(hr)) {
             ret = AVERROR(ENOMEM);
             goto done;
@@ -1337,7 +1341,7 @@ static int mf_choose_input_type(AVCodecContext *avctx)
             ret = 0;
             goto done;
         }
-        hr = MFCreateMediaType(&in_type);
+        hr = c->functions.MFCreateMediaType(&in_type);
         if (FAILED(hr)) {
             ret = AVERROR(ENOMEM);
             goto done;
@@ -1635,7 +1639,7 @@ err:
     return res;
 }
 
-static int mf_create(void *log, IMFTransform **mft, const AVCodec *codec, int use_hw)
+static int mf_create(void *log, MFFunctions *f, IMFTransform **mft, const AVCodec *codec, int use_hw)
 {
     int is_audio = codec->type == AVMEDIA_TYPE_AUDIO;
     int is_dec = av_codec_is_decoder(codec);
@@ -1660,7 +1664,7 @@ static int mf_create(void *log, IMFTransform **mft, const AVCodec *codec, int us
             category = MFT_CATEGORY_VIDEO_DECODER;
         }
 
-        if ((ret = ff_instantiate_mf(log, category, &reg, NULL, use_hw, mft)) < 0)
+        if ((ret = ff_instantiate_mf(log, f, category, &reg, NULL, use_hw, mft)) < 0)
             return ret;
     } else {
         if (is_audio) {
@@ -1671,7 +1675,7 @@ static int mf_create(void *log, IMFTransform **mft, const AVCodec *codec, int us
             category = MFT_CATEGORY_VIDEO_ENCODER;
         }
 
-        if ((ret = ff_instantiate_mf(log, category, NULL, &reg, use_hw, mft)) < 0)
+        if ((ret = ff_instantiate_mf(log, f, category, NULL, &reg, use_hw, mft)) < 0)
             return ret;
     }
 
@@ -1699,6 +1703,41 @@ static void mf_release_decoder(void *opaque, uint8_t *data)
     av_buffer_unref(&dec->device_ref);
 }
 
+//PLEX: copied from mfenc.c
+#define LOAD_MF_FUNCTION(context, func_name) \
+    context->functions.func_name = (void *)dlsym(context->library, #func_name); \
+    if (!context->functions.func_name) { \
+        av_log(context, AV_LOG_ERROR, "DLL mfplat.dll failed to find function "\
+           #func_name "\n"); \
+        return AVERROR_UNKNOWN; \
+    }
+
+// Windows N editions does not provide MediaFoundation by default.
+// So to avoid DLL loading error, MediaFoundation is dynamically loaded except
+// on UWP build since LoadLibrary is not available on it.
+static int mf_load_library(AVCodecContext *avctx)
+{
+    MFContext *c = avctx->priv_data;
+
+    c->library = dlopen("mfplat.dll", 0);
+
+    if (!c->library) {
+        av_log(c, AV_LOG_ERROR, "DLL mfplat.dll failed to open\n");
+        return AVERROR_UNKNOWN;
+    }
+
+    LOAD_MF_FUNCTION(c, MFStartup);
+    LOAD_MF_FUNCTION(c, MFShutdown);
+    LOAD_MF_FUNCTION(c, MFCreateAlignedMemoryBuffer);
+    LOAD_MF_FUNCTION(c, MFCreateSample);
+    LOAD_MF_FUNCTION(c, MFCreateMediaType);
+    // MFTEnumEx is missing in Windows Vista's mfplat.dll.
+    LOAD_MF_FUNCTION(c, MFTEnumEx);
+
+    return 0;
+}
+//PLEX
+
 static int mf_init(AVCodecContext *avctx)
 {
     MFContext *c = avctx->priv_data;
@@ -1707,6 +1746,9 @@ static int mf_init(AVCodecContext *avctx)
     MFDecoder *dec;
     const CLSID *subtype = ff_codec_to_mf_subtype(avctx->codec_id);
     int use_hw = 0;
+    
+    if ((ret = mf_load_library(avctx)) != 0)
+      return ret;
 
     c->tmp_frame = av_frame_alloc();
     if (!c->tmp_frame)
@@ -1727,12 +1769,12 @@ static int mf_init(AVCodecContext *avctx)
 
     c->main_subtype = *subtype;
 
-    if ((ret = mf_create(avctx, &c->mft, avctx->codec, use_hw)) < 0)
+    if ((ret = mf_create(avctx, &c->functions, &c->mft, avctx->codec, use_hw)) < 0)
         return ret;
 
     dec = av_mallocz(sizeof(*dec));
     if (!dec) {
-        ff_free_mf(&c->mft);
+        ff_free_mf(&c->functions, &c->mft);
         return AVERROR(ENOMEM);
     }
     dec->mft = c->mft;
@@ -1741,7 +1783,7 @@ static int mf_init(AVCodecContext *avctx)
                                       mf_release_decoder, NULL,
                                       AV_BUFFER_FLAG_READONLY);
     if (!c->decoder_ref) {
-        ff_free_mf(&c->mft);
+        ff_free_mf(&c->functions, &c->mft);
         return AVERROR(ENOMEM);
     }
 
@@ -1835,6 +1877,16 @@ static int mf_close(AVCodecContext *avctx)
     av_buffer_unref(&c->frames_ref);
     av_frame_free(&c->tmp_frame);
     av_buffer_unref(&c->decoder_ref);
+    
+    if (c->library)
+    {
+        // we don't want to dealloc mft yet so pass in a NULL
+        IMFTransform* m = NULL;
+        ff_free_mf(&c->functions, &m);
+    }
+
+    dlclose(c->library);
+    c->library = NULL;
 
     if (uninit_com)
         CoUninitialize();
@@ -1868,11 +1920,10 @@ static int mf_close(AVCodecContext *avctx)
         .priv_data_size = sizeof(MFContext),                                   \
         .init           = mf_init,                                             \
         .close          = mf_close,                                            \
-        .receive_frame  = mf_receive_frame,                                    \
+         FF_CODEC_RECEIVE_FRAME_CB(mf_receive_frame),                          \
         .flush          = mf_flush,                                            \
         .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,     \
         .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS |                          \
-                          FF_CODEC_CAP_INIT_THREADSAFE |                       \
                           FF_CODEC_CAP_INIT_CLEANUP,                           \
     };
 

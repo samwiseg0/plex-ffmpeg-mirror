@@ -104,6 +104,11 @@ fate-filter-chorus: tests/data/asynth-22050-1.wav
 fate-filter-chorus: SRC = $(TARGET_PATH)/tests/data/asynth-22050-1.wav
 fate-filter-chorus: CMD = framecrc -i $(SRC) -frames:a 10 -af aresample,chorus=0.050001:0.050002:64:0.050001:0.025003:2.00004,aresample
 
+FATE_AFILTER-$(call FILTERDEMDECENCMUX, CRYSTALIZER, WAV, PCM_S16LE, PCM_S16LE, WAV) += fate-filter-crystalizer
+fate-filter-crystalizer: tests/data/asynth-44100-2.wav
+fate-filter-crystalizer: SRC = $(TARGET_PATH)/tests/data/asynth-44100-2.wav
+fate-filter-crystalizer: CMD = framecrc -i $(SRC) -af aresample,crystalizer=2:0,crystalizer=-2:0,aresample
+
 FATE_AFILTER-$(call FILTERDEMDECENCMUX, DCSHIFT, WAV, PCM_S16LE, PCM_S16LE, WAV) += fate-filter-dcshift
 fate-filter-dcshift: tests/data/asynth-44100-2.wav
 fate-filter-dcshift: SRC = $(TARGET_PATH)/tests/data/asynth-44100-2.wav
@@ -179,7 +184,7 @@ fate-filter-pan-downmix2: SRC = $(TARGET_PATH)/tests/data/asynth-44100-11.wav
 fate-filter-pan-downmix2: CMD = framecrc -ss 3.14 -i $(SRC) -frames:a 20 -filter:a "pan=5C|c0=0.7*c0+0.7*c10|c1=c9|c2=c8|c3=c7|c4=c6"
 
 FATE_AFILTER-$(call ALLYES, LAVFI_INDEV, AEVALSRC_FILTER SILENCEREMOVE_FILTER) += fate-filter-silenceremove
-fate-filter-silenceremove: CMD = framecrc -auto_conversion_filters -f lavfi -i "aevalsrc=between(t\,1\,2)+between(t\,4\,5)+between(t\,7\,9):d=10:n=8192,silenceremove=start_periods=0:start_duration=0:start_threshold=0:stop_periods=-1:stop_duration=0:stop_threshold=-90dB:window=0:detection=peak"
+fate-filter-silenceremove: CMD = framecrc -auto_conversion_filters -f lavfi -i "aevalsrc=between(t\,1\,2)+between(t\,4\,5)+between(t\,7\,9):d=10:n=8192,silenceremove=start_periods=0:start_duration=0:start_threshold=0:stop_periods=-1:stop_duration=0:stop_threshold=-90dB:window=0:detection=avg"
 
 FATE_AFILTER_SAMPLES-$(call FILTERDEMDECENCMUX, STEREOTOOLS, WAV, PCM_S16LE, PCM_S16LE, WAV) += fate-filter-stereotools
 fate-filter-stereotools: SRC = $(TARGET_SAMPLES)/audio-reference/luckynight_2ch_44kHz_s16.wav
@@ -203,7 +208,7 @@ tests/data/hls-list.m3u8: TAG = GEN
 tests/data/hls-list.m3u8: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data
 	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< -nostdin \
         -f lavfi -i "aevalsrc=cos(2*PI*t)*sin(2*PI*(440+4*t)*t):d=20" -f segment -segment_time 10 -map 0 -flags +bitexact -codec:a mp2fixed \
-        -segment_list $(TARGET_PATH)/$@ -y $(TARGET_PATH)/tests/data/hls-out-%03d.ts -nostdin 2>/dev/null
+        -segment_list $(TARGET_PATH)/$@ -y $(TARGET_PATH)/tests/data/hls-out-%03d.ts 2>/dev/null
 
 FATE_AFILTER-$(call ALLYES, HLS_DEMUXER MPEGTS_MUXER MPEGTS_DEMUXER AEVALSRC_FILTER LAVFI_INDEV MP2FIXED_ENCODER) += fate-filter-hls
 fate-filter-hls: tests/data/hls-list.m3u8
@@ -217,7 +222,7 @@ tests/data/hls-list-append.m3u8: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data
         $(TARGET_EXEC) $(TARGET_PATH)/$< -nostdin \
         -f lavfi -i "aevalsrc=cos(2*PI*t)*sin(2*PI*(440+4*t)*t):d=20" -f hls -hls_time 10 -map 0 -flags +bitexact \
         -hls_flags append_list -codec:a mp2fixed -hls_segment_filename $(TARGET_PATH)/tests/data/hls-append-out-%03d.ts \
-        $(TARGET_PATH)/tests/data/hls-list-append.m3u8 -nostdin 2>/dev/null
+        $(TARGET_PATH)/tests/data/hls-list-append.m3u8 2>/dev/null
 
 FATE_AFILTER-$(call ALLYES, HLS_DEMUXER MPEGTS_MUXER MPEGTS_DEMUXER AEVALSRC_FILTER LAVFI_INDEV MP2FIXED_ENCODER) += fate-filter-hls-append
 fate-filter-hls-append: tests/data/hls-list-append.m3u8
@@ -280,7 +285,7 @@ fate-filter-channelmap-one-str: SRC = $(TARGET_PATH)/tests/data/asynth-44100-2.w
 fate-filter-channelmap-one-str: tests/data/asynth-44100-2.wav
 fate-filter-channelmap-one-str: CMD = md5 -auto_conversion_filters -i $(SRC) -filter_complex_script $(TARGET_PATH)/tests/data/filtergraphs/channelmap_one_str -f wav -fflags +bitexact
 fate-filter-channelmap-one-str: CMP = oneline
-fate-filter-channelmap-one-str: REF = 0ea3052e482c95d5d3bd9da6dac1b5fa
+fate-filter-channelmap-one-str: REF = e18791f65ce5861e130b2c3e472ab90a
 
 FATE_AFILTER-$(call FILTERDEMDECENCMUX, CHANNELMAP, WAV, PCM_S16LE, PCM_S16LE, WAV) += $(FATE_FILTER_CHANNELMAP)
 

@@ -57,7 +57,7 @@ typedef struct AVQSVFramesContext {
      * It is available when nb_surfaces is non-zero.
      */
     mfxFrameSurface1 *surfaces;
-
+    
     /**
      * Number of frames in the pool
      *
@@ -73,8 +73,8 @@ typedef struct AVQSVFramesContext {
      * A combination of MFX_MEMTYPE_* describing the frame pool.
      */
     int frame_type;
-
-    /**
+    
+        /**
      * A pointer to a mfxFrameInfo struct
      *
      * It is available when nb_surfaces is 0, all buffers allocated from the
@@ -84,3 +84,4 @@ typedef struct AVQSVFramesContext {
 } AVQSVFramesContext;
 
 #endif /* AVUTIL_HWCONTEXT_QSV_H */
+

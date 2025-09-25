@@ -20,7 +20,7 @@
 
 #include "avcodec.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 #include "libavutil/bswap.h"
 #include "libavutil/internal.h"
 
@@ -36,11 +36,10 @@ static av_cold int decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
-                        AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx, AVFrame *pic,
+                        int *got_frame, AVPacket *avpkt)
 {
     const uint32_t *src = (const uint32_t *)avpkt->data;
-    AVFrame *pic        = data;
     int width           = avctx->width;
     int y               = 0;
     uint16_t *ydst, *udst, *vdst, *yend;
@@ -63,7 +62,7 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
     vdst = (uint16_t *)pic->data[2];
     yend = ydst + width;
     pic->pict_type = AV_PICTURE_TYPE_I;
-    pic->key_frame = 1;
+    pic->flags |= AV_FRAME_FLAG_KEY;
 
     for (;;) {
         uint32_t v = av_be2ne32(*src++);
@@ -122,11 +121,10 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
 
 const FFCodec ff_v210x_decoder = {
     .p.name         = "v210x",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Uncompressed 4:2:2 10-bit"),
+    CODEC_LONG_NAME("Uncompressed 4:2:2 10-bit"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_V210X,
     .init           = decode_init,
-    .decode         = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

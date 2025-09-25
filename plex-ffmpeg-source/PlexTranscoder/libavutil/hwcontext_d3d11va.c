@@ -62,7 +62,9 @@ static av_cold void load_functions(void)
         return;
 
     mD3D11CreateDevice = (PFN_D3D11_CREATE_DEVICE) GetProcAddress(d3dlib, "D3D11CreateDevice");
-    mCreateDXGIFactory = (PFN_CREATE_DXGI_FACTORY) GetProcAddress(dxgilib, "CreateDXGIFactory");
+    mCreateDXGIFactory = (PFN_CREATE_DXGI_FACTORY) GetProcAddress(dxgilib, "CreateDXGIFactory1");
+    if (!mCreateDXGIFactory)
+        mCreateDXGIFactory = (PFN_CREATE_DXGI_FACTORY) GetProcAddress(dxgilib, "CreateDXGIFactory");
 #else
     // In UWP (which lacks LoadLibrary), CreateDXGIFactory isn't available,
     // only CreateDXGIFactory1
@@ -89,8 +91,13 @@ static const struct {
     { DXGI_FORMAT_B8G8R8A8_UNORM,    AV_PIX_FMT_BGRA },
     { DXGI_FORMAT_R10G10B10A2_UNORM, AV_PIX_FMT_X2BGR10 },
     { DXGI_FORMAT_R16G16B16A16_FLOAT, AV_PIX_FMT_RGBAF16 },
+    { DXGI_FORMAT_AYUV,         AV_PIX_FMT_VUYX },
     { DXGI_FORMAT_YUY2,         AV_PIX_FMT_YUYV422 },
     { DXGI_FORMAT_Y210,         AV_PIX_FMT_Y210 },
+    { DXGI_FORMAT_Y410,         AV_PIX_FMT_XV30 },
+    { DXGI_FORMAT_P016,         AV_PIX_FMT_P012 },
+    { DXGI_FORMAT_Y216,         AV_PIX_FMT_Y212 },
+    { DXGI_FORMAT_Y416,         AV_PIX_FMT_XV36 },
     // Special opaque formats. The pix_fmt is merely a place holder, as the
     // opaque format cannot be accessed directly.
     { DXGI_FORMAT_420_OPAQUE,   AV_PIX_FMT_YUV420P },
@@ -177,6 +184,7 @@ static AVBufferRef *wrap_texture_buf(AVHWFramesContext *ctx, ID3D11Texture2D *te
                                                    sizeof(*frames_hwctx->texture_infos));
         if (!frames_hwctx->texture_infos) {
             ID3D11Texture2D_Release(tex);
+            av_free(desc);
             return NULL;
         }
         s->nb_surfaces = s->nb_surfaces_used + 1;
@@ -189,7 +197,7 @@ static AVBufferRef *wrap_texture_buf(AVHWFramesContext *ctx, ID3D11Texture2D *te
     desc->texture = tex;
     desc->index   = index;
 
-    buf = av_buffer_create((uint8_t *)desc, sizeof(desc), free_texture, tex, 0);
+    buf = av_buffer_create((uint8_t *)desc, sizeof(*desc), free_texture, tex, 0);
     if (!buf) {
         ID3D11Texture2D_Release(tex);
         av_free(desc);
@@ -447,7 +455,7 @@ static int d3d11va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
 
         fill_texture_ptrs(map_data, map_linesize, ctx, &desc, &map);
 
-        av_image_copy(dst->data, dst->linesize, (const uint8_t **)map_data, map_linesize,
+        av_image_copy2(dst->data, dst->linesize, map_data, map_linesize,
                        ctx->sw_format, w, h);
 
         ID3D11DeviceContext_Unmap(device_hwctx->device_context, staging, 0);
@@ -459,7 +467,7 @@ static int d3d11va_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
 
         fill_texture_ptrs(map_data, map_linesize, ctx, &desc, &map);
 
-        av_image_copy(map_data, map_linesize, (const uint8_t **)src->data, src->linesize,
+        av_image_copy2(map_data, map_linesize, src->data, src->linesize,
                        ctx->sw_format, w, h);
 
         ID3D11DeviceContext_Unmap(device_hwctx->device_context, staging, 0);
@@ -547,47 +555,6 @@ static void d3d11va_device_uninit(AVHWDeviceContext *hwdev)
     }
 }
 
-static int d3d11va_device_find_adapter_by_vendor_id(AVHWDeviceContext *ctx, uint32_t flags, const char *vendor_id)
-{
-    HRESULT hr;
-    IDXGIAdapter *adapter = NULL;
-    IDXGIFactory2 *factory;
-    int adapter_id = 0;
-    long int id = strtol(vendor_id, NULL, 0);
-
-    hr = mCreateDXGIFactory(&IID_IDXGIFactory2, (void **)&factory);
-    if (FAILED(hr)) {
-        av_log(ctx, AV_LOG_ERROR, "CreateDXGIFactory returned error\n");
-        return -1;
-    }
-
-    while (IDXGIFactory2_EnumAdapters(factory, adapter_id++, &adapter) != DXGI_ERROR_NOT_FOUND) {
-        ID3D11Device* device = NULL;
-        DXGI_ADAPTER_DESC adapter_desc;
-
-        hr = mD3D11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, NULL, flags, NULL, 0, D3D11_SDK_VERSION, &device, NULL, NULL);
-        if (FAILED(hr)) {
-            av_log(ctx, AV_LOG_DEBUG, "D3D11CreateDevice returned error, try next adapter\n");
-            IDXGIAdapter_Release(adapter);
-            continue;
-        }
-
-        hr = IDXGIAdapter2_GetDesc(adapter, &adapter_desc);
-        ID3D11Device_Release(device);
-        IDXGIAdapter_Release(adapter);
-        if (FAILED(hr)) {
-            av_log(ctx, AV_LOG_DEBUG, "IDXGIAdapter2_GetDesc returned error, try next adapter\n");
-            continue;
-        } else if (adapter_desc.VendorId == id) {
-            IDXGIFactory2_Release(factory);
-            return adapter_id - 1;
-        }
-    }
-
-    IDXGIFactory2_Release(factory);
-    return -1;
-}
-
 static int d3d11va_device_create(AVHWDeviceContext *ctx, const char *device,
                                  AVDictionary *opts, int flags)
 {
@@ -599,7 +566,6 @@ static int d3d11va_device_create(AVHWDeviceContext *ctx, const char *device,
     UINT creationFlags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
     int is_debug       = !!av_dict_get(opts, "debug", NULL, 0);
     int ret;
-    int adapter = -1;
 
     // (On UWP we can't check this.)
 #if !HAVE_UWP
@@ -618,25 +584,10 @@ static int d3d11va_device_create(AVHWDeviceContext *ctx, const char *device,
     }
 
     if (device) {
-        adapter = atoi(device);
-    } else {
-        AVDictionaryEntry *e = av_dict_get(opts, "vendor_id", NULL, 0);
-        if (e && e->value) {
-            adapter = d3d11va_device_find_adapter_by_vendor_id(ctx, creationFlags, e->value);
-            if (adapter < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Failed to find d3d11va adapter by "
-                       "vendor id %s\n", e->value);
-                return AVERROR_UNKNOWN;
-            }
-        }
-    }
-
-    if (adapter >= 0) {
         IDXGIFactory2 *pDXGIFactory;
-
-        av_log(ctx, AV_LOG_VERBOSE, "Selecting d3d11va adapter %d\n", adapter);
         hr = mCreateDXGIFactory(&IID_IDXGIFactory2, (void **)&pDXGIFactory);
         if (SUCCEEDED(hr)) {
+            int adapter = atoi(device);
             if (FAILED(IDXGIFactory2_EnumAdapters(pDXGIFactory, adapter, &pAdapter)))
                 pAdapter = NULL;
             IDXGIFactory2_Release(pDXGIFactory);

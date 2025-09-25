@@ -25,8 +25,6 @@
  */
 
 #include "ac3dec_data.h"
-#include "ac3.h"
-#include "config_components.h"
 
 /**
  * Table used to ungroup 3 values stored in 5 bits.
@@ -44,7 +42,6 @@ const uint8_t ff_ac3_ungroup_3_in_5_bits_tab[32][3] = {
     { 3, 0, 1 }, { 3, 0, 2 }, { 3, 1, 0 }, { 3, 1, 1 }
 };
 
-#if CONFIG_EAC3_DECODER
 const uint8_t ff_eac3_hebap_tab[64] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 8,
     8, 8, 9, 9, 9, 10, 10, 10, 10, 11,
@@ -60,4 +57,3 @@ const uint8_t ff_eac3_hebap_tab[64] = {
  */
 const uint8_t ff_eac3_default_spx_band_struct[17] =
 { 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1 };
-#endif

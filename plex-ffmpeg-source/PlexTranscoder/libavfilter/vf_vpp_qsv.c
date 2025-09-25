@@ -748,7 +748,7 @@ static int activate(AVFilterContext *ctx)
 
     if (qsv->session) {
         if (in || qsv->eof) {
-            ret = ff_qsvvpp_filter_frame(qsv, inlink, in, in);
+            ret = ff_qsvvpp_filter_frame(qsv, inlink, in);
             av_frame_free(&in);
             if (ret == AVERROR(EAGAIN))
                 goto not_ready;
@@ -768,6 +768,11 @@ static int activate(AVFilterContext *ctx)
         if (in) {
             if (in->pts != AV_NOPTS_VALUE)
                 in->pts = av_rescale_q(in->pts, inlink->time_base, outlink->time_base);
+
+            if (outlink->frame_rate.num && outlink->frame_rate.den)
+                in->duration = av_rescale_q(1, av_inv_q(outlink->frame_rate), outlink->time_base);
+            else
+                in->duration = 0;
 
             ret = ff_filter_frame(outlink, in);
             if (ret < 0)
@@ -836,6 +841,7 @@ const AVFilter ff_vf_##sn##_qsv = { \
     fmts, \
     .activate       = activate, \
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE, \
+    .flags          = AVFILTER_FLAG_HWDEVICE,       \
 };
 
 #if CONFIG_VPP_QSV_FILTER
@@ -873,7 +879,7 @@ static const AVOption vpp_options[] = {
     { "h",      "Output video height(0=input video height, -1=keep input video aspect)", OFFSET(oh), AV_OPT_TYPE_STRING, { .str="w*ch/cw" }, 0, 255, .flags = FLAGS },
     { "height", "Output video height(0=input video height, -1=keep input video aspect)", OFFSET(oh), AV_OPT_TYPE_STRING, { .str="w*ch/cw" }, 0, 255, .flags = FLAGS },
     { "format", "Output pixel format", OFFSET(output_format_str), AV_OPT_TYPE_STRING, { .str = "same" }, .flags = FLAGS },
-    { "async_depth", "Internal parallelization depth, the higher the value the higher the latency.", OFFSET(qsv.async_depth), AV_OPT_TYPE_INT, { .i64 = 4 }, 0, INT_MAX, .flags = FLAGS },
+    { "async_depth", "Internal parallelization depth, the higher the value the higher the latency.", OFFSET(qsv.async_depth), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, .flags = FLAGS },
 #if QSV_ONEVPL
     { "scale_mode", "scaling & format conversion mode (mode compute(3), vd(4) and ve(5) are only available on some platforms)", OFFSET(scale_mode), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 5, .flags = FLAGS, "scale mode" },
 #else
@@ -916,9 +922,8 @@ static const AVOption vpp_options[] = {
       OFFSET(color_primaries_str), AV_OPT_TYPE_STRING, { .str = NULL }, .flags = FLAGS },
     { "out_color_transfer", "Output color transfer characteristics",
       OFFSET(color_transfer_str),  AV_OPT_TYPE_STRING, { .str = NULL }, .flags = FLAGS },
-
     {"tonemap", "Perform tonemapping (0=disable tonemapping, 1=perform tonemapping if the input has HDR metadata)", OFFSET(tonemap), AV_OPT_TYPE_INT, {.i64 = 0 }, 0, 1, .flags = FLAGS},
-
+    {"passthrough", "Apply pass through mode if possible.", OFFSET(has_passthrough), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, .flags = FLAGS },
     { NULL }
 };
 

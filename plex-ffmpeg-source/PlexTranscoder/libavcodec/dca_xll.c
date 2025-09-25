@@ -18,12 +18,13 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "avcodec.h"
 #include "libavutil/channel_layout.h"
 #include "dcadec.h"
 #include "dcadata.h"
 #include "dcamath.h"
 #include "dca_syncwords.h"
-#include "internal.h"
+#include "decode.h"
 #include "unary.h"
 
 static int get_linear(GetBitContext *gb, int n)
@@ -904,7 +905,7 @@ static void prescale_down_mix(DCAXllChSet *c, DCAXllChSet *o)
 
 static int parse_sub_headers(DCAXllDecoder *s, DCAExssAsset *asset)
 {
-    DCAContext *dca = s->avctx ? s->avctx->priv_data : NULL;
+    DCAContext *dca = s->avctx->priv_data;
     DCAXllChSet *c;
     int i, ret;
 
@@ -934,7 +935,7 @@ static int parse_sub_headers(DCAXllDecoder *s, DCAExssAsset *asset)
     }
 
     // Determine number of active channel sets to decode
-    switch (dca ? dca->request_channel_layout : 0) {
+    switch (dca->request_channel_layout) {
     case DCA_SPEAKER_LAYOUT_STEREO:
         s->nactivechsets = 1;
         break;
@@ -1040,7 +1041,7 @@ static int parse_band_data(DCAXllDecoder *s)
     return 0;
 }
 
-static int parse_frame(DCAXllDecoder *s, uint8_t *data, int size, DCAExssAsset *asset)
+static int parse_frame(DCAXllDecoder *s, const uint8_t *data, int size, DCAExssAsset *asset)
 {
     int ret;
 
@@ -1054,6 +1055,22 @@ static int parse_frame(DCAXllDecoder *s, uint8_t *data, int size, DCAExssAsset *
         return ret;
     if ((ret = parse_band_data(s)) < 0)
         return ret;
+
+     if (s->frame_size * 8 > FFALIGN(get_bits_count(&s->gb), 32)) {
+        unsigned int extradata_syncword;
+
+        // Align to dword
+        skip_bits_long(&s->gb, -get_bits_count(&s->gb) & 31);
+
+        extradata_syncword = show_bits_long(&s->gb, 32);
+
+        if (extradata_syncword == DCA_SYNCWORD_XLL_X) {
+            s->x_syncword_present = 1;
+        } else if ((extradata_syncword >> 1) == (DCA_SYNCWORD_XLL_X_IMAX >> 1)) {
+            s->x_imax_syncword_present = 1;
+        }
+    }
+
     if (ff_dca_seek_bits(&s->gb, s->frame_size * 8)) {
         av_log(s->avctx, AV_LOG_ERROR, "Read past end of XLL frame\n");
         return AVERROR_INVALIDDATA;
@@ -1067,7 +1084,7 @@ static void clear_pbr(DCAXllDecoder *s)
     s->pbr_delay = 0;
 }
 
-static int copy_to_pbr(DCAXllDecoder *s, uint8_t *data, int size, int delay)
+static int copy_to_pbr(DCAXllDecoder *s, const uint8_t *data, int size, int delay)
 {
     if (size > DCA_XLL_PBR_BUFFER_MAX)
         return AVERROR(ENOSPC);
@@ -1081,7 +1098,7 @@ static int copy_to_pbr(DCAXllDecoder *s, uint8_t *data, int size, int delay)
     return 0;
 }
 
-static int parse_frame_no_pbr(DCAXllDecoder *s, uint8_t *data, int size, DCAExssAsset *asset)
+static int parse_frame_no_pbr(DCAXllDecoder *s, const uint8_t *data, int size, DCAExssAsset *asset)
 {
     int ret = parse_frame(s, data, size, asset);
 
@@ -1119,7 +1136,7 @@ static int parse_frame_no_pbr(DCAXllDecoder *s, uint8_t *data, int size, DCAExss
     return 0;
 }
 
-static int parse_frame_pbr(DCAXllDecoder *s, uint8_t *data, int size, DCAExssAsset *asset)
+static int parse_frame_pbr(DCAXllDecoder *s, const uint8_t *data, int size, DCAExssAsset *asset)
 {
     int ret;
 
@@ -1160,7 +1177,7 @@ fail:
     return ret;
 }
 
-int ff_dca_xll_parse(DCAXllDecoder *s, uint8_t *data, DCAExssAsset *asset)
+int ff_dca_xll_parse(DCAXllDecoder *s, const uint8_t *data, DCAExssAsset *asset)
 {
     int ret;
 
@@ -1177,7 +1194,6 @@ int ff_dca_xll_parse(DCAXllDecoder *s, uint8_t *data, DCAExssAsset *asset)
     return ret;
 }
 
-#if 0
 static void undo_down_mix(DCAXllDecoder *s, DCAXllChSet *o, int band)
 {
     int i, j, k, nchannels = 0, *coeff_ptr = o->dmix_coeff;
@@ -1429,8 +1445,15 @@ int ff_dca_xll_filter_frame(DCAXllDecoder *s, AVFrame *frame)
         return AVERROR(EINVAL);
     }
 
+    if (s->x_imax_syncword_present) {
+        avctx->profile = AV_PROFILE_DTS_HD_MA_X_IMAX;
+    } else if (s->x_syncword_present) {
+        avctx->profile = AV_PROFILE_DTS_HD_MA_X;
+    } else {
+        avctx->profile = AV_PROFILE_DTS_HD_MA;
+    }
+
     avctx->bits_per_raw_sample = p->storage_bit_res;
-    avctx->profile = FF_PROFILE_DTS_HD_MA;
     avctx->bit_rate = 0;
 
     frame->nb_samples = nsamples = s->nframesamples << (s->nfreqbands - 1);
@@ -1470,7 +1493,6 @@ int ff_dca_xll_filter_frame(DCAXllDecoder *s, AVFrame *frame)
 
     return 0;
 }
-#endif
 
 av_cold void ff_dca_xll_flush(DCAXllDecoder *s)
 {

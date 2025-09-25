@@ -119,8 +119,8 @@ $(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(DEP_LIBS)
 endif
 
 clean::
-	$$(call RM_SPLIT,$(addprefix $(SUBDIR),$(CLEANFILES) $(CLEANSUFFIXES) $(LIBSUFFIXES)) \
-	    $(CLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%) $(CLEANSUFFIXES:%=$(SUBDIR)tests/%))
+	$(RM) $(addprefix $(SUBDIR),$(CLEANFILES) $(CLEANSUFFIXES) $(LIBSUFFIXES)) \
+	    $(CLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%) $(CLEANSUFFIXES:%=$(SUBDIR)tests/%)
 
 install-lib$(NAME)-shared: $(SUBDIR)$(SLIBNAME)
 	$(Q)mkdir -p "$(SHLIBDIR)"

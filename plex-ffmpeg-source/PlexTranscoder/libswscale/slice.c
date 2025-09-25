@@ -59,7 +59,7 @@ static int alloc_lines(SwsSlice *s, int size, int width)
         for (j = 0; j < n; ++j) {
             // chroma plane line U and V are expected to be contiguous in memory
             // by mmx vertical scaler code
-            s->plane[i].line[j] = av_malloc(size * 2 + 32);
+            s->plane[i].line[j] = av_mallocz(size * 2 + 32);
             if (!s->plane[i].line[j]) {
                 free_lines(s);
                 return AVERROR(ENOMEM);
@@ -282,7 +282,13 @@ int ff_init_filters(SwsContext * c)
     c->descIndex[0] = num_ydesc + (need_gamma ? 1 : 0);
     c->descIndex[1] = num_ydesc + num_cdesc + (need_gamma ? 1 : 0);
 
-
+    if (isFloat16(c->srcFormat)) {
+        c->h2f_tables = av_malloc(sizeof(*c->h2f_tables));
+        if (!c->h2f_tables)
+            return AVERROR(ENOMEM);
+        ff_init_half2float_tables(c->h2f_tables);
+        c->input_opaque = c->h2f_tables;
+    }
 
     c->desc  = av_calloc(c->numDesc,  sizeof(*c->desc));
     if (!c->desc)
@@ -393,5 +399,6 @@ int ff_free_filters(SwsContext *c)
             free_slice(&c->slice[i]);
         av_freep(&c->slice);
     }
+    av_freep(&c->h2f_tables);
     return 0;
 }

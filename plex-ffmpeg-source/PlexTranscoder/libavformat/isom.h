@@ -27,10 +27,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "libavcodec/get_bits.h"
-#include "libavcodec/put_bits.h"
-
-#include "libavutil/dovi_meta.h"
 #include "libavutil/encryption_info.h"
 #include "libavutil/mastering_display_metadata.h"
 #include "libavutil/spherical.h"
@@ -139,8 +135,11 @@ typedef struct MOVFragmentStreamInfo {
     int64_t first_tfra_pts;
     int64_t tfdt_dts;
     int64_t next_trun_dts;
+    // Index of the first sample/trun in the fragment.
+    int index_base;
     int index_entry;
     MOVEncryptionIndex *encryption_index;
+    int stsd_id; // current fragment stsd_id
 } MOVFragmentStreamInfo;
 
 typedef struct MOVFragmentIndexItem {
@@ -218,6 +217,7 @@ typedef struct MOVStreamContext {
     int has_palette;
     int64_t data_size;
     uint32_t tmcd_flags;  ///< tmcd track flags
+    uint8_t tmcd_nb_frames;  ///< tmcd number of frames per tick / second
     int64_t track_end;    ///< used for dts generation in fragmented movie files
     int start_pad;        ///< amount of samples to skip due to enc-dec delay
     unsigned int rap_group_count;
@@ -256,7 +256,6 @@ typedef struct MOVStreamContext {
     struct {
         struct AVAESCTR* aes_ctr;
         struct AVAES *aes_ctx;
-        unsigned int frag_index_entry_base;
         unsigned int per_sample_iv_size;  // Either 0, 8, or 16.
         AVEncryptionInfo *default_encrypted_sample;
         MOVEncryptionIndex *encryption_index;
@@ -287,6 +286,7 @@ typedef struct MOVContext {
     int use_absolute_path;
     int ignore_editlist;
     int advanced_editlist;
+    int advanced_editlist_autodisabled;
     int ignore_chapters;
     int seek_individually;
     int64_t next_root_atom; ///< offset of the next root atom
@@ -316,10 +316,18 @@ typedef struct MOVContext {
     int decryption_key_len;
     int enable_drefs;
     int32_t movie_display_matrix[3][3]; ///< display matrix from mvhd
-    int64_t header_size;
     int have_read_mfra_size;
     uint32_t mfra_size;
     uint32_t max_stts_delta;
+    int is_still_picture_avif;
+    int primary_item_id;
+    struct {
+        int item_id;
+        int extent_length;
+        int64_t extent_offset;
+    } *avif_info;
+    int avif_info_size;
+    int interleaved_read;
 } MOVContext;
 
 int ff_mp4_read_descr_len(AVIOContext *pb);
@@ -391,11 +399,6 @@ int ff_mov_read_esds(AVFormatContext *fc, AVIOContext *pb);
 int ff_mov_read_stsd_entries(MOVContext *c, AVIOContext *pb, int entries);
 void ff_mov_write_chan(AVIOContext *pb, int64_t channel_layout);
 
-#define MOV_DVCC_DVVC_SIZE 24
-int ff_mov_parse_dvcc_dvvc(AVStream *st, GetBitContext *gb, void *log_ctx);
-int ff_mov_put_dvcc_dvvc(uint8_t *out, int size, uint32_t *type,
-                         AVDOVIDecoderConfigurationRecord *dovi, void *log_ctx);
-
 #define FF_MOV_FLAG_MFRA_AUTO -1
 #define FF_MOV_FLAG_MFRA_DTS 1
 #define FF_MOV_FLAG_MFRA_PTS 2
@@ -416,6 +419,8 @@ static inline enum AVCodecID ff_mov_get_lpcm_codec_id(int bps, int flags)
 
 #define MOV_ISMV_TTML_TAG MKTAG('d', 'f', 'x', 'p')
 #define MOV_MP4_TTML_TAG  MKTAG('s', 't', 'p', 'p')
+#define MOV_MP4_FPCM_TAG  MKTAG('f', 'p', 'c', 'm')
+#define MOV_MP4_IPCM_TAG  MKTAG('i', 'p', 'c', 'm')
 
 struct MP4TrackKindValueMapping {
     int         disposition;

@@ -18,22 +18,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavfilter/vf_inlineass.h"
+#include "libavformat/http.h"
+#include "libavformat/internal.h"
+#include "libavutil/avstring.h"
+#include "libavutil/bprint.h"
+
 #include "plex.h"
 #include "ffmpeg.h"
 #include "opt_common.h"
-
 #include "config_components.h"
-
-#include <sys/types.h>
-#include <limits.h>
-#include "strings.h"
-#include "libavcodec/mpegvideo.h"
-#include "libavfilter/vf_inlineass.h"
-#include "libavformat/http.h"
-#include "libavutil/bprint.h"
-#include "libavutil/timestamp.h"
-#include "libavformat/internal.h"
-#include "libavutil/thread.h"
 
 PlexContext plexContext = {0};
 
@@ -265,7 +259,7 @@ void plex_report_stream_detail(AVStream *st)
 
     if ((st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
          st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
-        sti->codec_info_nb_frames_total == 0)
+        sti->codec_info_nb_frames == 0)
         return; // Unparsed stream; will be skipped in output
 
     if (plexContext.progress_url &&
@@ -377,6 +371,33 @@ void plex_init(int argc, char **argv, const OptionDef *options)
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+int plex_opt_progress_url(void *optctx, const char *opt, const char *arg)
+{
+    plexContext.progress_url = (char*)arg;
+    return 0;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+int plex_opt_loglevel(void *o, const char *opt, const char *arg)
+{
+    opt_loglevel((void*)&av_log_set_level_plex, opt, arg);
+    return 0;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void plex_feedback(const AVFormatContext *ic)
+{
+    if (plexContext.progress_url) {
+        char url[4096];
+        double duration = -1;
+        if (ic && ic->duration != AV_NOPTS_VALUE)
+            duration = ic->duration / (double)AV_TIME_BASE;
+        snprintf(url, sizeof(url), "%s?duration=%f", plexContext.progress_url, duration);
+        av_free(PMS_IssueHttpRequest(url, "PUT"));
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void plex_prepare_setup_streams_for_input_stream(InputStream* ist)
 {
 #if CONFIG_INLINEASS_FILTER
@@ -410,18 +431,21 @@ void plex_link_subtitles_to_graph(AVFilterGraph* g)
                 if (assCtx->width && assCtx->height)
                     avfilter_inlineass_set_storage_size(ctx, assCtx->width, assCtx->height);
 
-                for (int j = 0; j < nb_input_streams; j++) {
-                    InputStream *ist = input_streams[j];
+                for (InputStream *ist = ist_iter(NULL); ist; ist = ist_iter(ist)) {
                     if (ist->st->codecpar->codec_type == AVMEDIA_TYPE_ATTACHMENT)
                         avfilter_inlineass_add_attachment(ctx, ist->st);
                     if (ist->file_index == assCtx->file_index &&
-                        ist->st->index == assCtx->stream_index &&
-                        ist->sub2video.sub_queue) {
-                        while (av_fifo_can_read(ist->sub2video.sub_queue)) {
-                            AVSubtitle tmp;
-                            av_fifo_read(ist->sub2video.sub_queue, &tmp, 1);
-                            plex_process_subtitles(ist, &tmp);
-                            avsubtitle_free(&tmp);
+                        ist->st->index == assCtx->stream_index) {
+                        for (int i = 0; i < ist->nb_filters; i++) {
+                            AVFifo* frame_queue = fq_from_ifilter(ist->filters[i]);
+                            if(!frame_queue)
+                                continue;
+                            while (av_fifo_can_read(frame_queue)) {
+                                AVFrame* tmp;
+                                av_fifo_read(frame_queue, &tmp, 1);
+                                plex_process_subtitles(ist, (const AVSubtitle*)tmp->buf[0]->data);
+                                av_frame_free(&tmp);
+                            }
                         }
                     }
                 }
@@ -492,44 +516,6 @@ int plex_process_subtitles(const InputStream *ist, AVSubtitle *sub)
     }
 #endif
     return 0;
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-int plex_opt_progress_url(void *optctx, const char *opt, const char *arg)
-{
-    plexContext.progress_url = (char*)arg;
-    plex_status("startup");
-    return 0;
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-int plex_opt_loglevel(void *o, const char *opt, const char *arg)
-{
-    opt_loglevel((void*)&av_log_set_level_plex, opt, arg);
-    return 0;
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void plex_feedback(const AVFormatContext *ic)
-{
-    if (plexContext.progress_url) {
-        char url[4096];
-        double duration = -1;
-        if (ic && ic->duration != AV_NOPTS_VALUE)
-            duration = ic->duration / (double)AV_TIME_BASE;
-        snprintf(url, sizeof(url), "%s?duration=%f", plexContext.progress_url, duration);
-        av_free(PMS_IssueHttpRequest(url, "PUT"));
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void plex_status(const char *str)
-{
-    if (plexContext.progress_url) {
-        char url[4096];
-        snprintf(url, sizeof(url), "%s?status=%s", plexContext.progress_url, str);
-        av_free(PMS_IssueHttpRequest(url, "PUT"));
-    }
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -21,6 +21,8 @@
  */
 
 #include "libavutil/avassert.h"
+
+#include "av1_parse.h"
 #include "cbs.h"
 #include "cbs_av1.h"
 #include "parser.h"
@@ -115,11 +117,6 @@ static int av1_parser_parse(AVCodecParserContext *ctx,
         ctx->width  = frame->frame_width_minus_1 + 1;
         ctx->height = frame->frame_height_minus_1 + 1;
 
-        av_reduce(&avctx->sample_aspect_ratio.num, &avctx->sample_aspect_ratio.den,
-                  (int64_t)ctx->width * (frame->render_height_minus_1 + 1),
-                  (int64_t)ctx->height * (frame->render_width_minus_1 + 1),
-                  INT_MAX);
-
         ctx->key_frame = frame->frame_type == AV1_FRAME_KEY && !frame->show_existing_frame;
 
         switch (frame->frame_type) {
@@ -167,8 +164,10 @@ static int av1_parser_parse(AVCodecParserContext *ctx,
     avctx->color_trc = (enum AVColorTransferCharacteristic) color->transfer_characteristics;
     avctx->color_range = color->color_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 
-    if (avctx->framerate.num)
-        avctx->time_base = av_inv_q(av_mul_q(avctx->framerate, (AVRational){avctx->ticks_per_frame, 1}));
+    if (seq->timing_info_present_flag)
+        avctx->framerate = ff_av1_framerate(1LL + seq->timing_info.num_ticks_per_picture_minus_1,
+                                            seq->timing_info.num_units_in_display_tick,
+                                            seq->timing_info.time_scale);
 
 end:
     ff_cbs_fragment_reset(td);

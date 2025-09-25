@@ -158,6 +158,8 @@ static int ff_tls_read(URLContext *h, uint8_t *buf, int size)
         return ret;
     else if (ret == 0)
         return AVERROR_EOF;
+    else if (ret == TLS_WANT_POLLIN || ret == TLS_WANT_POLLOUT)
+        return AVERROR(EAGAIN);
     av_log(h, AV_LOG_ERROR, "%s\n", tls_error(p->ctx));
     return AVERROR(EIO);
 }
@@ -171,6 +173,8 @@ static int ff_tls_write(URLContext *h, const uint8_t *buf, int size)
         return ret;
     else if (ret == 0)
         return AVERROR_EOF;
+    else if (ret == TLS_WANT_POLLIN || ret == TLS_WANT_POLLOUT)
+        return AVERROR(EAGAIN);
     av_log(h, AV_LOG_ERROR, "%s\n", tls_error(p->ctx));
     return AVERROR(EIO);
 }
@@ -192,7 +196,12 @@ static const AVOption options[] = {
     { NULL }
 };
 
-TLS_CLASS(TLSContext, tls_shared)
+static const AVClass tls_class = {
+    .class_name = "tls",
+    .item_name  = av_default_item_name,
+    .option     = options,
+    .version    = LIBAVUTIL_VERSION_INT,
+};
 
 const URLProtocol ff_tls_protocol = {
     .name           = "tls",

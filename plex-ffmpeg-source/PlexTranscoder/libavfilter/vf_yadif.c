@@ -21,11 +21,8 @@
 
 #include "libavutil/common.h"
 #include "libavutil/pixdesc.h"
-#include "libavutil/imgutils.h"
 #include "avfilter.h"
-#include "formats.h"
 #include "internal.h"
-#include "video.h"
 #include "yadif.h"
 
 typedef struct ThreadData {
@@ -252,8 +249,6 @@ static void filter(AVFilterContext *ctx, AVFrame *dstpic,
         ff_filter_execute(ctx, filter_slice, &td, NULL,
                           FFMIN(h, ff_filter_get_nb_threads(ctx)));
     }
-
-    emms_c();
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
@@ -263,6 +258,7 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_frame_free(&yadif->prev);
     av_frame_free(&yadif->cur );
     av_frame_free(&yadif->next);
+    ff_ccfifo_uninit(&yadif->cc_fifo);
 }
 
 static const enum AVPixelFormat pix_fmts[] = {
@@ -283,27 +279,11 @@ static const enum AVPixelFormat pix_fmts[] = {
     AV_PIX_FMT_NONE
 };
 
-void ff_yadif_init(YADIFContext *s)
-{
-    if (s->csp->comp[0].depth > 8) {
-        s->filter_line  = filter_line_c_16bit;
-        s->filter_edges = filter_edges_16bit;
-    } else {
-        s->filter_line  = filter_line_c;
-        s->filter_edges = filter_edges;
-    }
-
-    if (ARCH_AARCH64)
-        ff_yadif_init_aarch64(s);
-
-    if (ARCH_X86)
-        ff_yadif_init_x86(s);
-}
-
 static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
     YADIFContext *s = ctx->priv;
+    int ret;
 
     outlink->time_base = av_mul_q(ctx->inputs[0]->time_base, (AVRational){1, 2});
     outlink->w             = ctx->inputs[0]->w;
@@ -312,6 +292,14 @@ static int config_output(AVFilterLink *outlink)
     if(s->mode & 1)
         outlink->frame_rate = av_mul_q(ctx->inputs[0]->frame_rate,
                                     (AVRational){2, 1});
+    else
+        outlink->frame_rate = ctx->inputs[0]->frame_rate;
+
+    ret = ff_ccfifo_init(&s->cc_fifo, outlink->frame_rate, ctx);
+    if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Failure to setup CC FIFO queue\n");
+        return ret;
+    }
 
     if (outlink->w < 3 || outlink->h < 3) {
         av_log(ctx, AV_LOG_ERROR, "Video of less than 3 columns or lines is not supported\n");
@@ -320,8 +308,17 @@ static int config_output(AVFilterLink *outlink)
 
     s->csp = av_pix_fmt_desc_get(outlink->format);
     s->filter = filter;
+    if (s->csp->comp[0].depth > 8) {
+        s->filter_line  = filter_line_c_16bit;
+        s->filter_edges = filter_edges_16bit;
+    } else {
+        s->filter_line  = filter_line_c;
+        s->filter_edges = filter_edges;
+    }
 
-    ff_yadif_init(s);
+#if ARCH_X86
+    ff_yadif_init_x86(s);
+#endif
 
     return 0;
 }

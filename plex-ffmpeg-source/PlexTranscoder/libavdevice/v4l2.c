@@ -34,6 +34,16 @@
 
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
+#include "libavutil/imgutils.h"
+#include "libavutil/parseutils.h"
+#include "libavutil/pixdesc.h"
+#include "libavutil/time.h"
+#include "libavcodec/avcodec.h"
+#include "libavcodec/codec_desc.h"
+#include "libavformat/demux.h"
+#include "libavformat/internal.h"
+#include "avdevice.h"
+#include "timefilter.h"
 #include "v4l2-common.h"
 #include <dirent.h>
 
@@ -97,10 +107,10 @@ struct video_data {
     int (*open_f)(const char *file, int oflag, ...);
     int (*close_f)(int fd);
     int (*dup_f)(int fd);
-#ifdef __GLIBC__
-    int (*ioctl_f)(int fd, unsigned long int request, ...);
-#else
+#if HAVE_POSIX_IOCTL
     int (*ioctl_f)(int fd, int request, ...);
+#else
+    int (*ioctl_f)(int fd, unsigned long int request, ...);
 #endif
     ssize_t (*read_f)(int fd, void *buffer, size_t n);
     void *(*mmap_f)(void *start, size_t length, int prot, int flags, int fd, int64_t offset);
@@ -1002,6 +1012,7 @@ static int v4l2_read_close(AVFormatContext *ctx)
 
     mmap_close(s);
 
+    ff_timefilter_destroy(s->timefilter);
     v4l2_close(s->fd);
     return 0;
 }

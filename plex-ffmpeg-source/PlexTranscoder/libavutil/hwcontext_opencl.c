@@ -1208,10 +1208,7 @@ static int opencl_device_derive(AVHWDeviceContext *hwdev,
 
 #if HAVE_OPENCL_DRM_BEIGNET
     case AV_HWDEVICE_TYPE_DRM:
-#endif
-#if HAVE_OPENCL_DRM_BEIGNET || HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_HWDEVICE_TYPE_VAAPI:
-#if HAVE_OPENCL_DRM_BEIGNET
         {
             // Surface mapping works via DRM PRIME fds with no special
             // initialisation required in advance.  This just finds the
@@ -1234,15 +1231,16 @@ static int opencl_device_derive(AVHWDeviceContext *hwdev,
                 err = opencl_device_create_internal(hwdev, &selector, NULL);
             }
             av_dict_free(&selector_opts);
-            if (err >= 0)
-                break;
         }
+        break;
 #endif
+
 #if HAVE_OPENCL_VAAPI_INTEL_MEDIA
         // The generic code automatically attempts to derive from all
         // ancestors of the given device, so we can ignore QSV devices here
         // and just consider the inner VAAPI device it was derived from.
-        if (src_ctx->type == AV_HWDEVICE_TYPE_VAAPI) {
+    case AV_HWDEVICE_TYPE_VAAPI:
+        {
             AVVAAPIDeviceContext *src_hwctx = src_ctx->hwctx;
             cl_context_properties props[7] = {
                 CL_CONTEXT_PLATFORM,
@@ -1265,7 +1263,6 @@ static int opencl_device_derive(AVHWDeviceContext *hwdev,
 
             err = opencl_device_create_internal(hwdev, &selector, props);
         }
-#endif
         break;
 #endif
 
@@ -1414,7 +1411,8 @@ static int opencl_get_plane_format(enum AVPixelFormat pixfmt,
         // The bits in each component must be packed in the
         // most-significant-bits of the relevant bytes.
         if (comp->shift + comp->depth != 8 &&
-            comp->shift + comp->depth != 16)
+            comp->shift + comp->depth != 16 &&
+            comp->shift + comp->depth != 32)
             return AVERROR(EINVAL);
         // The depth must not vary between components.
         if (depth && comp->depth != depth)
@@ -1458,6 +1456,8 @@ static int opencl_get_plane_format(enum AVPixelFormat pixfmt,
     } else {
         if (depth <= 16)
             image_format->image_channel_data_type = CL_UNORM_INT16;
+        else if (depth == 32)
+            image_format->image_channel_data_type = CL_FLOAT;
         else
             return AVERROR(EINVAL);
     }
@@ -2873,19 +2873,14 @@ static int opencl_map_to(AVHWFramesContext *hwfc, AVFrame *dst,
         if (priv->beignet_drm_mapping_usable)
             return opencl_map_from_drm_beignet(hwfc, dst, src, flags);
 #endif
-#if HAVE_OPENCL_VAAPI_BEIGNET || HAVE_OPENCL_VAAPI_INTEL_MEDIA
-    case AV_PIX_FMT_VAAPI:
 #if HAVE_OPENCL_VAAPI_BEIGNET
+    case AV_PIX_FMT_VAAPI:
         if (priv->beignet_drm_mapping_usable)
             return opencl_map_from_vaapi(hwfc, dst, src, flags);
 #endif
 #if HAVE_OPENCL_VAAPI_INTEL_MEDIA
-        if (priv->qsv_mapping_usable)
-            return opencl_map_from_qsv(hwfc, dst, src, flags);
-#endif
-#endif
-#if HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_PIX_FMT_QSV:
+    case AV_PIX_FMT_VAAPI:
         if (priv->qsv_mapping_usable)
             return opencl_map_from_qsv(hwfc, dst, src, flags);
 #endif
@@ -2919,21 +2914,15 @@ static int opencl_frames_derive_to(AVHWFramesContext *dst_fc,
             return AVERROR(ENOSYS);
         break;
 #endif
-#if HAVE_OPENCL_VAAPI_BEIGNET || HAVE_OPENCL_VAAPI_INTEL_MEDIA
-    case AV_HWDEVICE_TYPE_VAAPI:
-        if (1
 #if HAVE_OPENCL_VAAPI_BEIGNET
-            && !priv->beignet_drm_mapping_usable
-#endif
-#if HAVE_OPENCL_VAAPI_INTEL_MEDIA
-            && !priv->qsv_mapping_usable
-#endif
-            )
+    case AV_HWDEVICE_TYPE_VAAPI:
+        if (!priv->beignet_drm_mapping_usable)
             return AVERROR(ENOSYS);
         break;
 #endif
 #if HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_HWDEVICE_TYPE_QSV:
+    case AV_HWDEVICE_TYPE_VAAPI:
         if (!priv->qsv_mapping_usable)
             return AVERROR(ENOSYS);
         break;

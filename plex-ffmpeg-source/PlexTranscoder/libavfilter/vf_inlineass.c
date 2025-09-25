@@ -1,9 +1,8 @@
 /*
- * Text subtitle rendering filter, based on vf_subtitles
+ * inlineass filter
+ * Copyright (c) 2025 Plex, Inc.
  *
- * Copyright (c) 2016 Plex, Inc.
- *
- * This file is part of FFmpeg.
+* This file is part of FFmpeg.
  *
  * FFmpeg is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public

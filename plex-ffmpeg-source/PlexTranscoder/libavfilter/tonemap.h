@@ -21,6 +21,9 @@
 #ifndef AVFILTER_TONEMAP_H
 #define AVFILTER_TONEMAP_H
 
+#include "libavutil/csp.h"
+#include "libavutil/mem_internal.h"
+
 #include "avfilter.h"
 #include "colorspace.h"
 
@@ -45,7 +48,7 @@ typedef struct TonemapIntParams {
     int16_t (*yuv2rgb_coeffs)[3][3][8];
     int16_t (*rgb2yuv_coeffs)[3][3][8];
     double  (*rgb2rgb_coeffs)[3][3];
-    const struct LumaCoefficients *coeffs, *ocoeffs;
+    const AVLumaCoefficients *coeffs, *ocoeffs;
     double desat;
 } TonemapIntParams;
 
@@ -57,7 +60,7 @@ typedef struct TonemapContext {
     double desat;
     double peak;
 
-    const struct LumaCoefficients *coeffs, *ocoeffs;
+    const AVLumaCoefficients *coeffs, *ocoeffs;
 
     void (*tonemap_frame_p010_nv12)(uint8_t *dsty, uint8_t *dstuv, const uint16_t *src, const uint16_t *srcuv, const int *dstlinesize, const int *srclinesize, int width, int height, const struct TonemapIntParams *params);
 

@@ -210,6 +210,13 @@ enum AVPixelFormat ff_qsv_map_fourcc(uint32_t fourcc)
     case MFX_FOURCC_RGB4: return AV_PIX_FMT_BGRA;
     case MFX_FOURCC_YUY2: return AV_PIX_FMT_YUYV422;
     case MFX_FOURCC_Y210: return AV_PIX_FMT_Y210;
+    case MFX_FOURCC_AYUV: return AV_PIX_FMT_VUYX;
+    case MFX_FOURCC_Y410: return AV_PIX_FMT_XV30;
+#if QSV_VERSION_ATLEAST(1, 31)
+    case MFX_FOURCC_P016: return AV_PIX_FMT_P012;
+    case MFX_FOURCC_Y216: return AV_PIX_FMT_Y212;
+    case MFX_FOURCC_Y416: return AV_PIX_FMT_XV36;
+#endif
     }
     return AV_PIX_FMT_NONE;
 }
@@ -246,6 +253,28 @@ int ff_qsv_map_pixfmt(enum AVPixelFormat format, uint32_t *fourcc, uint16_t *shi
         *fourcc = MFX_FOURCC_Y210;
         *shift = 1;
         return AV_PIX_FMT_Y210;
+    case AV_PIX_FMT_VUYX:
+        *fourcc = MFX_FOURCC_AYUV;
+        *shift = 0;
+        return AV_PIX_FMT_VUYX;
+    case AV_PIX_FMT_XV30:
+        *fourcc = MFX_FOURCC_Y410;
+        *shift = 0;
+        return AV_PIX_FMT_XV30;
+#if QSV_VERSION_ATLEAST(1, 31)
+    case AV_PIX_FMT_P012:
+        *fourcc = MFX_FOURCC_P016;
+        *shift = 1;
+        return AV_PIX_FMT_P012;
+    case AV_PIX_FMT_Y212:
+        *fourcc = MFX_FOURCC_Y216;
+        *shift = 1;
+        return AV_PIX_FMT_Y212;
+    case AV_PIX_FMT_XV36:
+        *fourcc = MFX_FOURCC_Y416;
+        *shift = 1;
+        return AV_PIX_FMT_XV36;
+#endif
     default:
         return AVERROR(ENOSYS);
     }
@@ -256,6 +285,7 @@ int ff_qsv_map_frame_to_surface(const AVFrame *frame, mfxFrameSurface1 *surface)
     switch (frame->format) {
     case AV_PIX_FMT_NV12:
     case AV_PIX_FMT_P010:
+    case AV_PIX_FMT_P012:
         surface->Data.Y  = frame->data[0];
         surface->Data.UV = frame->data[1];
         /* The SDK checks Data.V when using system memory for VP9 encoding */
@@ -275,9 +305,32 @@ int ff_qsv_map_frame_to_surface(const AVFrame *frame, mfxFrameSurface1 *surface)
         break;
 
     case AV_PIX_FMT_Y210:
+    case AV_PIX_FMT_Y212:
         surface->Data.Y16 = (mfxU16 *)frame->data[0];
         surface->Data.U16 = (mfxU16 *)frame->data[0] + 1;
         surface->Data.V16 = (mfxU16 *)frame->data[0] + 3;
+        break;
+
+    case AV_PIX_FMT_VUYX:
+        surface->Data.V = frame->data[0];
+        surface->Data.U = frame->data[0] + 1;
+        surface->Data.Y = frame->data[0] + 2;
+        // Only set Data.A to a valid address, the SDK doesn't
+        // use the value from the frame.
+        surface->Data.A = frame->data[0] + 3;
+        break;
+
+    case AV_PIX_FMT_XV30:
+        surface->Data.U = frame->data[0];
+        break;
+
+    case AV_PIX_FMT_XV36:
+        surface->Data.U = frame->data[0];
+        surface->Data.Y = frame->data[0] + 2;
+        surface->Data.V = frame->data[0] + 4;
+        // Only set Data.A to a valid address, the SDK doesn't
+        // use the value from the frame.
+        surface->Data.A = frame->data[0] + 6;
         break;
 
     default:
@@ -454,7 +507,7 @@ static int qsv_new_mfx_loader(AVCodecContext *avctx,
     mfxStatus sts;
     mfxLoader loader = NULL;
     mfxConfig cfg;
-    mfxVariant impl_value;
+    mfxVariant impl_value = {0};
 
     loader = MFXLoad();
     if (!loader) {
@@ -820,8 +873,16 @@ static mfxStatus qsv_frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req,
         AVHWFramesContext *frames_ctx = (AVHWFramesContext*)ctx->hw_frames_ctx->data;
         AVQSVFramesContext *frames_hwctx = frames_ctx->hwctx;
         mfxFrameInfo      *i  = &req->Info;
-        mfxFrameInfo      *i1 = &frames_hwctx->surfaces[0].Info;
+        mfxFrameInfo      *i1;
 
+        if (!frames_hwctx->nb_surfaces) {
+            av_log(ctx->logctx, AV_LOG_DEBUG,
+                   "Dynamic frame pools, no frame is pre-allocated\n");
+
+            return MFX_ERR_NONE;
+        }
+
+        i1 = &frames_hwctx->surfaces[0].Info;
         if (i->Width  > i1->Width  || i->Height > i1->Height ||
             i->FourCC != i1->FourCC || i->ChromaFormat != i1->ChromaFormat) {
             av_log(ctx->logctx, AV_LOG_ERROR, "Mismatching surface properties in an "
@@ -841,10 +902,13 @@ static mfxStatus qsv_frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req,
         /* internal frames -- allocate a new hw frames context */
         AVHWFramesContext *ext_frames_ctx = (AVHWFramesContext*)ctx->hw_frames_ctx->data;
         mfxFrameInfo      *i  = &req->Info;
-
+        AVQSVFramesContext *ext_frames_hwctx = ext_frames_ctx->hwctx;
         AVBufferRef *frames_ref, *mids_buf;
         AVHWFramesContext *frames_ctx;
         AVQSVFramesContext *frames_hwctx;
+        
+        if (!ext_frames_hwctx->nb_surfaces)
+          return MFX_ERR_UNSUPPORTED;
 
         frames_ref = av_hwframe_ctx_alloc(ext_frames_ctx->device_ref);
         if (!frames_ref)
@@ -893,6 +957,9 @@ static mfxStatus qsv_frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req,
 
 static mfxStatus qsv_frame_free(mfxHDL pthis, mfxFrameAllocResponse *resp)
 {
+    if (!resp->mids)
+      return MFX_ERR_NONE;
+
     av_buffer_unref((AVBufferRef**)&resp->mids[resp->NumFrameActual]);
     av_buffer_unref((AVBufferRef**)&resp->mids[resp->NumFrameActual + 1]);
     av_freep(&resp->mids);
@@ -901,10 +968,20 @@ static mfxStatus qsv_frame_free(mfxHDL pthis, mfxFrameAllocResponse *resp)
 
 static mfxStatus qsv_frame_lock(mfxHDL pthis, mfxMemId mid, mfxFrameData *ptr)
 {
-    QSVMid *qsv_mid = mid;
-    AVHWFramesContext *hw_frames_ctx = (AVHWFramesContext*)qsv_mid->hw_frames_ref->data;
-    AVQSVFramesContext *hw_frames_hwctx = hw_frames_ctx->hwctx;
+    QSVFramesContext *ctx = (QSVFramesContext *)pthis;
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)ctx->hw_frames_ctx->data;
+    AVQSVFramesContext *frames_hwctx = frames_ctx->hwctx;
+    QSVMid *qsv_mid;
+    AVHWFramesContext *hw_frames_ctx;
+    AVQSVFramesContext *hw_frames_hwctx;
     int ret;
+    
+    if (!frames_hwctx->nb_surfaces)
+      return MFX_ERR_UNSUPPORTED;
+
+    qsv_mid = mid;
+    hw_frames_ctx = (AVHWFramesContext*)qsv_mid->hw_frames_ref->data;
+    hw_frames_hwctx = hw_frames_ctx->hwctx;
 
     if (qsv_mid->locked_frame)
         return MFX_ERR_UNDEFINED_BEHAVIOR;
@@ -958,7 +1035,15 @@ fail:
 
 static mfxStatus qsv_frame_unlock(mfxHDL pthis, mfxMemId mid, mfxFrameData *ptr)
 {
-    QSVMid *qsv_mid = mid;
+     QSVFramesContext *ctx = (QSVFramesContext *)pthis;
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)ctx->hw_frames_ctx->data;
+    AVQSVFramesContext *frames_hwctx = frames_ctx->hwctx;
+    QSVMid *qsv_mid;
+
+    if (!frames_hwctx->nb_surfaces)
+      return MFX_ERR_UNSUPPORTED;
+
+    qsv_mid = mid;
 
     av_frame_free(&qsv_mid->locked_frame);
     av_frame_free(&qsv_mid->hw_frame);
@@ -968,9 +1053,18 @@ static mfxStatus qsv_frame_unlock(mfxHDL pthis, mfxMemId mid, mfxFrameData *ptr)
 
 static mfxStatus qsv_frame_get_hdl(mfxHDL pthis, mfxMemId mid, mfxHDL *hdl)
 {
-    QSVMid *qsv_mid = (QSVMid*)mid;
+    QSVFramesContext *ctx = (QSVFramesContext *)pthis;
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)ctx->hw_frames_ctx->data;
+    AVQSVFramesContext *frames_hwctx = frames_ctx->hwctx;
     mfxHDLPair *pair_dst = (mfxHDLPair*)hdl;
-    mfxHDLPair *pair_src = (mfxHDLPair*)qsv_mid->handle_pair;
+    mfxHDLPair *pair_src;
+
+    if (frames_hwctx->nb_surfaces) {
+        QSVMid *qsv_mid = (QSVMid*)mid;
+        pair_src = (mfxHDLPair*)qsv_mid->handle_pair;
+    } else {
+        pair_src = (mfxHDLPair*)mid;
+    }
 
     pair_dst->first = pair_src->first;
 
@@ -1084,14 +1178,18 @@ int ff_qsv_init_session_frames(AVCodecContext *avctx, mfxSession *psession,
 
     if (!opaque) {
         qsv_frames_ctx->logctx = avctx;
+        qsv_frames_ctx->mids = NULL;
+        qsv_frames_ctx->nb_mids = 0;
 
         /* allocate the memory ids for the external frames */
-        av_buffer_unref(&qsv_frames_ctx->mids_buf);
-        qsv_frames_ctx->mids_buf = qsv_create_mids(qsv_frames_ctx->hw_frames_ctx);
-        if (!qsv_frames_ctx->mids_buf)
+        if (frames_hwctx->nb_surfaces) {
+          av_buffer_unref(&qsv_frames_ctx->mids_buf);
+          qsv_frames_ctx->mids_buf = qsv_create_mids(qsv_frames_ctx->hw_frames_ctx);
+          if (!qsv_frames_ctx->mids_buf)
             return AVERROR(ENOMEM);
-        qsv_frames_ctx->mids    = (QSVMid*)qsv_frames_ctx->mids_buf->data;
-        qsv_frames_ctx->nb_mids = frames_hwctx->nb_surfaces;
+          qsv_frames_ctx->mids = (QSVMid*)qsv_frames_ctx->mids_buf->data;
+          qsv_frames_ctx->nb_mids = frames_hwctx->nb_surfaces;
+        }
 
         err = MFXVideoCORE_SetFrameAllocator(session, &frame_allocator);
         if (err != MFX_ERR_NONE)

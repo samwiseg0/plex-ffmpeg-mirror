@@ -30,6 +30,7 @@
 #include "avformat.h"
 #include "id3v2.h"
 #include "internal.h"
+#include "url.h"
 
 
 /**
@@ -48,6 +49,31 @@ int av_match_ext(const char *filename, const char *extensions)
     if (ext)
         return av_match_name(ext + 1, extensions);
     return 0;
+}
+
+int ff_match_url_ext(const char *url, const char *extensions)
+{
+    const char *ext;
+    URLComponents uc;
+    int ret;
+    char scratchpad[128];
+
+    if (!url)
+        return 0;
+
+    ret = ff_url_decompose(&uc, url, NULL);
+    if (ret < 0 || !URL_COMPONENT_HAVE(uc, scheme))
+        return ret;
+    for (ext = uc.query; *ext != '.' && ext > uc.path; ext--)
+        ;
+
+    if (*ext != '.')
+        return 0;
+    if (uc.query - ext > sizeof(scratchpad))
+        return AVERROR(ENOMEM); //not enough memory in our scratchpad
+    av_strlcpy(scratchpad, ext + 1, uc.query - ext);
+
+    return av_match_name(scratchpad, extensions);
 }
 
 const AVOutputFormat *av_guess_format(const char *short_name, const char *filename,
@@ -99,7 +125,7 @@ enum AVCodecID av_guess_codec(const AVOutputFormat *fmt, const char *short_name,
     if (type == AVMEDIA_TYPE_VIDEO) {
         enum AVCodecID codec_id = AV_CODEC_ID_NONE;
 
-#if CONFIG_IMAGE2_MUXER
+#if CONFIG_IMAGE2_MUXER || CONFIG_IMAGE2PIPE_MUXER
         if (!strcmp(fmt->name, "image2") || !strcmp(fmt->name, "image2pipe")) {
             codec_id = ff_guess_image2_codec(filename);
         }
@@ -111,8 +137,6 @@ enum AVCodecID av_guess_codec(const AVOutputFormat *fmt, const char *short_name,
         return fmt->audio_codec;
     else if (type == AVMEDIA_TYPE_SUBTITLE)
         return fmt->subtitle_codec;
-    else if (type == AVMEDIA_TYPE_DATA)
-        return fmt->data_codec;
     else
         return AV_CODEC_ID_NONE;
 }
@@ -233,10 +257,15 @@ int av_probe_input_buffer2(AVIOContext *pb, const AVInputFormat **fmt,
     int ret = 0, probe_size, buf_offset = 0;
     int score = 0;
     int ret2;
-    int last = 0;
+    int eof = 0;
 
     if (!max_probe_size)
         max_probe_size = PROBE_BUF_MAX;
+    else if (max_probe_size < PROBE_BUF_MIN) {
+        av_log(logctx, AV_LOG_ERROR,
+               "Specified probe size value %u cannot be < %u\n", max_probe_size, PROBE_BUF_MIN);
+        return AVERROR(EINVAL);
+    }
 
     if (offset >= max_probe_size)
         return AVERROR(EINVAL);
@@ -252,25 +281,23 @@ int av_probe_input_buffer2(AVIOContext *pb, const AVInputFormat **fmt,
         }
     }
 
-    for (probe_size = FFMIN(PROBE_BUF_MIN, max_probe_size); probe_size <= max_probe_size && !*fmt;
-         probe_size = (probe_size > buf_offset) ?
-                      probe_size :
-                      FFMIN(probe_size << 1,
+    for (probe_size = PROBE_BUF_MIN; probe_size <= max_probe_size && !*fmt && !eof;
+         probe_size = FFMIN(probe_size << 1,
                             FFMAX(max_probe_size, probe_size + 1))) {
         score = probe_size < max_probe_size ? AVPROBE_SCORE_RETRY : 0;
 
         /* Read probe data. */
         if ((ret = av_reallocp(&buf, probe_size + AVPROBE_PADDING_SIZE)) < 0)
             goto fail;
-        if ((ret = avio_read_partial(pb, buf + buf_offset,
-                                     probe_size - buf_offset)) < 0) {
+        if ((ret = avio_read(pb, buf + buf_offset,
+                             probe_size - buf_offset)) < 0) {
             /* Fail if error was not end of file, otherwise, lower score. */
             if (ret != AVERROR_EOF)
                 goto fail;
 
-            last  = 1;
             score = 0;
             ret   = 0;          /* error was end of file, nothing read */
+            eof   = 1;
         }
         buf_offset += ret;
         if (buf_offset < offset)
@@ -297,8 +324,7 @@ int av_probe_input_buffer2(AVIOContext *pb, const AVInputFormat **fmt,
             fprintf(f, "probe_size:%d format:%s score:%d filename:%s\n", probe_size, (*fmt)->name, score, filename);
             fclose(f);
 #endif
-        } else if (last)
-            break;
+        }
     }
 
     if (!*fmt)

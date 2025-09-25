@@ -20,8 +20,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdio.h>
-#include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "libavutil/mem_internal.h"
@@ -30,10 +29,10 @@
 #include "avcodec.h"
 #include "bswapdsp.h"
 #include "codec_internal.h"
+#include "decode.h"
 #include "copy_block.h"
 #include "get_bits.h"
 #include "idctdsp.h"
-#include "internal.h"
 
 #define CBPLO_VLC_BITS   6
 #define CBPHI_VLC_BITS   6
@@ -52,9 +51,8 @@ typedef struct IMM4Context {
     unsigned lo;
     unsigned hi;
 
-    ScanTable intra_scantable;
-    DECLARE_ALIGNED(32, int16_t, block)[6][64];
     IDCTDSPContext idsp;
+    DECLARE_ALIGNED(32, int16_t, block)[6][64];
 } IMM4Context;
 
 static const uint8_t intra_cb[] = {
@@ -130,7 +128,7 @@ static int decode_block(AVCodecContext *avctx, GetBitContext *gb,
                         int block, int factor, int flag, int offset, int flag2)
 {
     IMM4Context *s = avctx->priv_data;
-    const uint8_t *scantable = s->intra_scantable.permutated;
+    const uint8_t *idct_permutation = s->idsp.idct_permutation;
     int i, last, len, factor2;
 
     for (i = !flag; i < 64; i++) {
@@ -153,17 +151,17 @@ static int decode_block(AVCodecContext *avctx, GetBitContext *gb,
         i += len;
         if (i >= 64)
             break;
-        s->block[block][scantable[i]] = offset * (factor2 < 0 ? -1 : 1) + factor * factor2;
+        s->block[block][idct_permutation[i]] = offset * (factor2 < 0 ? -1 : 1) + factor * factor2;
         if (last)
             break;
     }
 
     if (s->hi == 2 && flag2 && block < 4) {
         if (flag)
-            s->block[block][scantable[0]]  *= 2;
-        s->block[block][scantable[1]]  *= 2;
-        s->block[block][scantable[8]]  *= 2;
-        s->block[block][scantable[16]] *= 2;
+            s->block[block][idct_permutation[0]]  *= 2;
+        s->block[block][idct_permutation[1]]  *= 2;
+        s->block[block][idct_permutation[8]]  *= 2;
+        s->block[block][idct_permutation[16]] *= 2;
     }
 
     return 0;
@@ -173,7 +171,7 @@ static int decode_blocks(AVCodecContext *avctx, GetBitContext *gb,
                          unsigned cbp, int flag, int offset, unsigned flag2)
 {
     IMM4Context *s = avctx->priv_data;
-    const uint8_t *scantable = s->intra_scantable.permutated;
+    const uint8_t *idct_permutation = s->idsp.idct_permutation;
     int ret, i;
 
     memset(s->block, 0, sizeof(s->block));
@@ -186,7 +184,7 @@ static int decode_blocks(AVCodecContext *avctx, GetBitContext *gb,
                 x = 128;
             x *= 8;
 
-            s->block[i][scantable[0]] = x;
+            s->block[i][idct_permutation[0]] = x;
         }
 
         if (cbp & (1 << (5 - i))) {
@@ -221,12 +219,15 @@ static int decode_intra(AVCodecContext *avctx, GetBitContext *gb, AVFrame *frame
 
     for (y = 0; y < avctx->height; y += 16) {
         for (x = 0; x < avctx->width; x += 16) {
-            unsigned flag, cbphi, cbplo;
+            unsigned flag, cbplo;
+            int cbphi;
 
             cbplo = get_vlc2(gb, cbplo_tab.table, CBPLO_VLC_BITS, 1);
             flag = get_bits1(gb);
 
             cbphi = get_cbphi(gb, 1);
+            if (cbphi < 0)
+                return cbphi;
 
             ret = decode_blocks(avctx, gb, cbplo | (cbphi << 2), 0, offset, flag);
             if (ret < 0)
@@ -274,7 +275,8 @@ static int decode_inter(AVCodecContext *avctx, GetBitContext *gb,
     for (y = 0; y < avctx->height; y += 16) {
         for (x = 0; x < avctx->width; x += 16) {
             int reverse, intra_block, value;
-            unsigned cbphi, cbplo, flag2 = 0;
+            unsigned cbplo, flag2 = 0;
+            int cbphi;
 
             if (get_bits1(gb)) {
                 copy_block16(frame->data[0] + y * frame->linesize[0] + x,
@@ -300,6 +302,9 @@ static int decode_inter(AVCodecContext *avctx, GetBitContext *gb,
 
             cbplo = value >> 4;
             cbphi = get_cbphi(gb, reverse);
+            if (cbphi < 0)
+                return cbphi;
+
             if (intra_block) {
                 ret = decode_blocks(avctx, gb, cbplo | (cbphi << 2), 0, offset, flag2);
                 if (ret < 0)
@@ -353,12 +358,11 @@ static int decode_inter(AVCodecContext *avctx, GetBitContext *gb,
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, void *data,
+static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
                         int *got_frame, AVPacket *avpkt)
 {
     IMM4Context *s = avctx->priv_data;
     GetBitContext *gb = &s->gb;
-    AVFrame *frame = data;
     int width, height;
     unsigned type;
     int ret, scaled;
@@ -423,11 +427,11 @@ static int decode_frame(AVCodecContext *avctx, void *data,
 
     switch (type) {
     case 0x19781977:
-        frame->key_frame = 1;
+        frame->flags |= AV_FRAME_FLAG_KEY;
         frame->pict_type = AV_PICTURE_TYPE_I;
         break;
     case 0x12250926:
-        frame->key_frame = 0;
+        frame->flags &= ~AV_FRAME_FLAG_KEY;
         frame->pict_type = AV_PICTURE_TYPE_P;
         break;
     default:
@@ -437,7 +441,7 @@ static int decode_frame(AVCodecContext *avctx, void *data,
 
     if (avctx->width  != width ||
         avctx->height != height) {
-        if (!frame->key_frame) {
+        if (!(frame->flags & AV_FRAME_FLAG_KEY)) {
             av_log(avctx, AV_LOG_ERROR, "Frame size change is unsupported.\n");
             return AVERROR_INVALIDDATA;
         }
@@ -448,16 +452,19 @@ static int decode_frame(AVCodecContext *avctx, void *data,
     if (ret < 0)
         return ret;
 
-    if ((ret = ff_get_buffer(avctx, frame, frame->key_frame ? AV_GET_BUFFER_FLAG_REF : 0)) < 0)
+    if (((avctx->width + 15) / 16) * ((avctx->height + 15) / 16) > get_bits_left(gb))
+        return AVERROR_INVALIDDATA;
+
+
+    if ((ret = ff_get_buffer(avctx, frame, (frame->flags & AV_FRAME_FLAG_KEY) ? AV_GET_BUFFER_FLAG_REF : 0)) < 0)
         return ret;
 
-    if (frame->key_frame) {
+    if (frame->flags & AV_FRAME_FLAG_KEY) {
         ret = decode_intra(avctx, gb, frame);
         if (ret < 0)
             return ret;
 
-        av_frame_unref(s->prev_frame);
-        if ((ret = av_frame_ref(s->prev_frame, frame)) < 0)
+        if ((ret = av_frame_replace(s->prev_frame, frame)) < 0)
             return ret;
     } else {
         if (!s->prev_frame->data[0]) {
@@ -477,18 +484,18 @@ static int decode_frame(AVCodecContext *avctx, void *data,
 
 static av_cold void imm4_init_static_data(void)
 {
-    INIT_VLC_STATIC_FROM_LENGTHS(&cbplo_tab, CBPLO_VLC_BITS, FF_ARRAY_ELEMS(cbplo),
+    VLC_INIT_STATIC_FROM_LENGTHS(&cbplo_tab, CBPLO_VLC_BITS, FF_ARRAY_ELEMS(cbplo),
                                  &cbplo[0][1], 2, &cbplo[0][0], 2, 1,
                                  0, 0, 1 << CBPLO_VLC_BITS);
 
-    INIT_VLC_SPARSE_STATIC(&cbphi_tab, CBPHI_VLC_BITS, FF_ARRAY_ELEMS(cbphi_bits),
+    VLC_INIT_SPARSE_STATIC(&cbphi_tab, CBPHI_VLC_BITS, FF_ARRAY_ELEMS(cbphi_bits),
                            cbphi_bits, 1, 1, cbphi_codes, 1, 1, NULL, 0, 0, 64);
 
-    INIT_VLC_STATIC_FROM_LENGTHS(&blktype_tab, BLKTYPE_VLC_BITS, FF_ARRAY_ELEMS(blktype),
+    VLC_INIT_STATIC_FROM_LENGTHS(&blktype_tab, BLKTYPE_VLC_BITS, FF_ARRAY_ELEMS(blktype),
                                  &blktype[0][1], 2, &blktype[0][0], 2, 1,
                                  0, 0, 1 << BLKTYPE_VLC_BITS);
 
-    INIT_VLC_STATIC_FROM_LENGTHS(&block_tab, BLOCK_VLC_BITS, FF_ARRAY_ELEMS(block_bits),
+    VLC_INIT_STATIC_FROM_LENGTHS(&block_tab, BLOCK_VLC_BITS, FF_ARRAY_ELEMS(block_bits),
                                  block_bits, 1, block_symbols, 2, 2,
                                  0, 0, 1 << BLOCK_VLC_BITS);
 }
@@ -497,14 +504,9 @@ static av_cold int decode_init(AVCodecContext *avctx)
 {
     static AVOnce init_static_once = AV_ONCE_INIT;
     IMM4Context *s = avctx->priv_data;
-    uint8_t table[64];
-
-    for (int i = 0; i < 64; i++)
-        table[i] = i;
 
     ff_bswapdsp_init(&s->bdsp);
     ff_idctdsp_init(&s->idsp, avctx);
-    ff_init_scantable(s->idsp.idct_permutation, &s->intra_scantable, table);
 
     s->prev_frame = av_frame_alloc();
     if (!s->prev_frame)
@@ -535,15 +537,14 @@ static av_cold int decode_close(AVCodecContext *avctx)
 
 const FFCodec ff_imm4_decoder = {
     .p.name           = "imm4",
-    .p.long_name      = NULL_IF_CONFIG_SMALL("Infinity IMM4"),
+    CODEC_LONG_NAME("Infinity IMM4"),
     .p.type           = AVMEDIA_TYPE_VIDEO,
     .p.id             = AV_CODEC_ID_IMM4,
     .priv_data_size   = sizeof(IMM4Context),
     .init             = decode_init,
     .close            = decode_close,
-    .decode           = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
     .flush            = decode_flush,
     .p.capabilities   = AV_CODEC_CAP_DR1,
-    .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE |
-                        FF_CODEC_CAP_INIT_CLEANUP,
+    .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
 };

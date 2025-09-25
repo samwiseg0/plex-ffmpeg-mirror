@@ -26,6 +26,7 @@
 #include "avformat.h"
 #include "avio_internal.h"
 #include "internal.h"
+#include "mux.h"
 #include "rawenc.h"
 #include "libavutil/intreadwrite.h"
 
@@ -36,7 +37,7 @@
 typedef struct KVAGHeader {
     uint32_t    magic;
     uint32_t    data_size;
-    uint32_t    sample_rate;
+    int    sample_rate;
     uint16_t    stereo;
 } KVAGHeader;
 
@@ -67,6 +68,9 @@ static int kvag_read_header(AVFormatContext *s)
     hdr.data_size               = AV_RL32(buf +  4);
     hdr.sample_rate             = AV_RL32(buf +  8);
     hdr.stereo                  = AV_RL16(buf + 12);
+
+    if (hdr.sample_rate <= 0)
+        return AVERROR_INVALIDDATA;
 
     par                         = st->codecpar;
     par->codec_type             = AVMEDIA_TYPE_AUDIO;
@@ -188,12 +192,12 @@ static int kvag_write_trailer(AVFormatContext *s)
     return 0;
 }
 
-const AVOutputFormat ff_kvag_muxer = {
-    .name           = "kvag",
-    .long_name      = NULL_IF_CONFIG_SMALL("Simon & Schuster Interactive VAG"),
-    .extensions     = "vag",
-    .audio_codec    = AV_CODEC_ID_ADPCM_IMA_SSI,
-    .video_codec    = AV_CODEC_ID_NONE,
+const FFOutputFormat ff_kvag_muxer = {
+    .p.name         = "kvag",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Simon & Schuster Interactive VAG"),
+    .p.extensions   = "vag",
+    .p.audio_codec  = AV_CODEC_ID_ADPCM_IMA_SSI,
+    .p.video_codec  = AV_CODEC_ID_NONE,
     .init           = kvag_write_init,
     .write_header   = kvag_write_header,
     .write_packet   = ff_raw_write_packet,

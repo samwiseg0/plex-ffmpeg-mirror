@@ -29,6 +29,9 @@ $(foreach VAR,$(SILENT),$(eval override $(VAR) = @$($(VAR))))
 $(eval INSTALL = @$(call ECHO,INSTALL,$$(^:$(SRC_DIR)/%=%)); $(INSTALL))
 endif
 
+# Prepend to a recursively expanded variable without making it simply expanded.
+PREPEND = $(eval $(1) = $(patsubst %,$$(%), $(2)) $(value $(1)))
+
 # NASM requires -I path terminated with /
 IFLAGS     := -I. -I$(SRC_LINK)/
 CPPFLAGS   := $(IFLAGS) $(CPPFLAGS)
@@ -37,7 +40,9 @@ CCFLAGS     = $(CPPFLAGS) $(CFLAGS)
 OBJCFLAGS  += $(EOBJCFLAGS)
 OBJCCFLAGS  = $(CPPFLAGS) $(CFLAGS) $(OBJCFLAGS)
 ASFLAGS    := $(CPPFLAGS) $(ASFLAGS)
-CXXFLAGS   := $(CPPFLAGS) $(CFLAGS) $(CXXFLAGS)
+# Use PREPEND here so that later (target-dependent) additions to CPPFLAGS
+# end up in CXXFLAGS.
+$(call PREPEND,CXXFLAGS, CPPFLAGS CFLAGS)
 X86ASMFLAGS += $(IFLAGS:%=%/) -I$(<D)/ -Pconfig.asm
 NVCCFLAGS  += $(IFLAGS)
 
@@ -213,18 +218,6 @@ OUTDIRS := $(OUTDIRS) $(dir $(OBJS) $(HOBJS) $(HOSTOBJS) $(SLIBOBJS) $(SHLIBOBJS
 
 CLEANSUFFIXES     = *.d *.gcda *.gcno *.h.c *.ho *.map *.o *.pc *.ptx *.ptx.gz *.ptx.c *.ver *.version *$(DEFAULT_X86ASMD).asm *~ *.ilk *.pdb
 LIBSUFFIXES       = *.a *.lib *.so *.so.* *.dylib *.dll *.def *.dll.a
-
-define RM_SPLIT
-	$(eval _splitargs:=)
-	$(foreach obj,$1,$(eval _splitargs+=$(wildcard $(obj))))
-	$(eval _args:=)
-	$(foreach obj,$(_splitargs),$(eval _args+=$(obj))$(if $(word 20,$(_args)),$(RM)$(_args)$(EOL)$(eval _args:=)))
-	$(if $(_args),$(RM)$(_args))
-endef
-define EOL
-
-
-endef
 
 define RULES
 clean::

@@ -382,6 +382,19 @@ int ff_jpegls_decode_picture(MJpegDecodeContext *s, int near,
     state->T3     = s->t3;
     state->reset  = s->reset;
     ff_jpegls_reset_coding_parameters(state, 0);
+
+    /* Testing parameters here, we cannot test in LSE or SOF because
+     * these interdepend and are allowed in either order
+     */
+    if (state->maxval >= (1<<state->bpp) ||
+        state->T1 > state->T2 ||
+        state->T2 > state->T3 ||
+        state->T3 > state->maxval ||
+        state->reset > FFMAX(255, state->maxval)) {
+        ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
     ff_jpegls_init_state(state);
 
     if (s->bits <= 8)
@@ -484,19 +497,19 @@ int ff_jpegls_decode_picture(MJpegDecodeContext *s, int near,
             for (i = 0; i < s->height; i++) {
                 switch(s->xfrm) {
                 case 1:
-                    for (x = off; x < w; x += 3) {
+                    for (x = off; x + 2 < w; x += 3) {
                         src[x  ] += src[x+1] + 128;
                         src[x+2] += src[x+1] + 128;
                     }
                     break;
                 case 2:
-                    for (x = off; x < w; x += 3) {
+                    for (x = off; x + 2 < w; x += 3) {
                         src[x  ] += src[x+1] + 128;
                         src[x+2] += ((src[x  ] + src[x+1])>>1) + 128;
                     }
                     break;
                 case 3:
-                    for (x = off; x < w; x += 3) {
+                    for (x = off; x + 2 < w; x += 3) {
                         int g = src[x+0] - ((src[x+2]+src[x+1])>>2) + 64;
                         src[x+0] = src[x+2] + g + 128;
                         src[x+2] = src[x+1] + g + 128;
@@ -504,7 +517,7 @@ int ff_jpegls_decode_picture(MJpegDecodeContext *s, int near,
                     }
                     break;
                 case 4:
-                    for (x = off; x < w; x += 3) {
+                    for (x = off; x + 2 < w; x += 3) {
                         int r    = src[x+0] - ((                       359 * (src[x+2]-128) + 490) >> 8);
                         int g    = src[x+0] - (( 88 * (src[x+1]-128) - 183 * (src[x+2]-128) +  30) >> 8);
                         int b    = src[x+0] + ((454 * (src[x+1]-128)                        + 574) >> 8);
@@ -552,14 +565,13 @@ end:
 
 const FFCodec ff_jpegls_decoder = {
     .p.name         = "jpegls",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("JPEG-LS"),
+    CODEC_LONG_NAME("JPEG-LS"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_JPEGLS,
     .priv_data_size = sizeof(MJpegDecodeContext),
     .init           = ff_mjpeg_decode_init,
     .close          = ff_mjpeg_decode_end,
-    .receive_frame  = ff_mjpeg_receive_frame,
+    FF_CODEC_DECODE_CB(ff_mjpeg_decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP |
-                      FF_CODEC_CAP_SETS_PKT_DTS,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

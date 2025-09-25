@@ -46,9 +46,9 @@
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_internal.h"
+#include "decode.h"
 #include "exif.h"
 #include "get_bits.h"
-#include "internal.h"
 #include "thread.h"
 #include "tiff_common.h"
 #include "vp8.h"
@@ -200,7 +200,7 @@ typedef struct WebPContext {
     int has_alpha;                      /* has a separate alpha chunk */
     enum AlphaCompression alpha_compression; /* compression type for alpha chunk */
     enum AlphaFilter alpha_filter;      /* filtering method for alpha chunk */
-    uint8_t *alpha_data;                /* alpha chunk data */
+    const uint8_t *alpha_data;          /* alpha chunk data */
     int alpha_data_size;                /* alpha chunk data size */
     int has_exif;                       /* set after an EXIF chunk has been processed */
     int has_iccp;                       /* set after an ICCP chunk has been processed */
@@ -233,7 +233,7 @@ static void image_ctx_free(ImageContext *img)
     if (img->huffman_groups) {
         for (i = 0; i < img->nb_huffman_groups; i++) {
             for (j = 0; j < HUFFMAN_CODES_PER_META_CODE; j++)
-                ff_free_vlc(&img->huffman_groups[i * HUFFMAN_CODES_PER_META_CODE + j].vlc);
+                ff_vlc_free(&img->huffman_groups[i * HUFFMAN_CODES_PER_META_CODE + j].vlc);
         }
         av_free(img->huffman_groups);
     }
@@ -300,9 +300,9 @@ static int huff_reader_build_canonical(HuffReader *r, const uint8_t *code_length
         return AVERROR_INVALIDDATA;
     }
 
-    ret = init_vlc(&r->vlc, 8, alphabet_size,
+    ret = vlc_init(&r->vlc, 8, alphabet_size,
                    code_lengths, sizeof(*code_lengths), sizeof(*code_lengths),
-                   codes, sizeof(*codes), sizeof(*codes), INIT_VLC_OUTPUT_LE);
+                   codes, sizeof(*codes), sizeof(*codes), VLC_INIT_OUTPUT_LE);
     if (ret < 0) {
         av_free(codes);
         return ret;
@@ -415,7 +415,7 @@ static int read_huffman_code_normal(WebPContext *s, HuffReader *hc,
     ret = huff_reader_build_canonical(hc, code_lengths, alphabet_size);
 
 finish:
-    ff_free_vlc(&code_len_hc.vlc);
+    ff_vlc_free(&code_len_hc.vlc);
     av_free(code_lengths);
     return ret;
 }
@@ -702,6 +702,9 @@ static int decode_entropy_coded_image(WebPContext *s, enum ImageRole role,
             }
             ref_x = FFMAX(0, ref_x);
             ref_y = FFMAX(0, ref_y);
+
+            if (ref_y == y && ref_x >= x)
+                return AVERROR_INVALIDDATA;
 
             /* copy pixels
              * source and dest regions can overlap and wrap lines, so just
@@ -1084,7 +1087,7 @@ static void update_canvas_size(AVCodecContext *avctx, int w, int h)
 }
 
 static int vp8_lossless_decode_frame(AVCodecContext *avctx, AVFrame *p,
-                                     int *got_frame, uint8_t *data_start,
+                                     int *got_frame, const uint8_t *data_start,
                                      unsigned int data_size, int is_alpha_chunk)
 {
     WebPContext *s = avctx->priv_data;
@@ -1186,7 +1189,7 @@ static int vp8_lossless_decode_frame(AVCodecContext *avctx, AVFrame *p,
 
     *got_frame   = 1;
     p->pict_type = AV_PICTURE_TYPE_I;
-    p->key_frame = 1;
+    p->flags |= AV_FRAME_FLAG_KEY;
     ret          = data_size;
 
 free_and_return:
@@ -1240,7 +1243,7 @@ static void alpha_inverse_prediction(AVFrame *frame, enum AlphaFilter m)
 }
 
 static int vp8_lossy_decode_alpha(AVCodecContext *avctx, AVFrame *p,
-                                  uint8_t *data_start,
+                                  const uint8_t *data_start,
                                   unsigned int data_size)
 {
     WebPContext *s = avctx->priv_data;
@@ -1334,10 +1337,9 @@ static int vp8_lossy_decode_frame(AVCodecContext *avctx, AVFrame *p,
     return ret;
 }
 
-static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
-                             AVPacket *avpkt)
+static int webp_decode_frame(AVCodecContext *avctx, AVFrame *p,
+                             int *got_frame, AVPacket *avpkt)
 {
-    AVFrame * const p = data;
     WebPContext *s = avctx->priv_data;
     GetByteContext gb;
     int ret;
@@ -1480,7 +1482,7 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
                 goto exif_end;
             }
 
-            av_dict_copy(&((AVFrame *) data)->metadata, exif_metadata, 0);
+            av_dict_copy(&p->metadata, exif_metadata, 0);
 
 exif_end:
             av_dict_free(&exif_metadata);
@@ -1558,13 +1560,13 @@ static av_cold int webp_decode_close(AVCodecContext *avctx)
 
 const FFCodec ff_webp_decoder = {
     .p.name         = "webp",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("WebP image"),
+    CODEC_LONG_NAME("WebP image"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_WEBP,
     .priv_data_size = sizeof(WebPContext),
     .init           = webp_decode_init,
-    .decode         = webp_decode_frame,
+    FF_CODEC_DECODE_CB(webp_decode_frame),
     .close          = webp_decode_close,
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
+    .caps_internal  = FF_CODEC_CAP_ICC_PROFILES,
 };

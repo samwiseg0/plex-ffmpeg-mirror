@@ -32,6 +32,7 @@
 #include "libavformat/os_support.h"
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
+#include "libavutil/file_open.h"
 #include "libavutil/opt.h"
 #include "libavutil/thread.h"
 #include "ac3_parser_internal.h"
@@ -280,7 +281,6 @@ static int eae_common_init(AVCodecContext *avctx, const char *subfolder)
 
     s->prev_pts = AV_NOPTS_VALUE;
     s->prev_pts_samples = 0;
-    av_fifo_auto_grow_limit(avctx->internal->pkt_props, 65536);
 
     return 0;
 }
@@ -1284,14 +1284,6 @@ static int eae_decode_receive_frame(AVCodecContext *avctx, AVFrame *frame)
         av_log(avctx, AV_LOG_WARNING, "EAE output unaligned (got %d, expected %d)\n",
                samples, s->output_frames[0].frame_size);
 
-    // Discard any leftover queued packets from our previous batch
-    while (avctx->internal->last_pkt_props->data &&
-           avctx->internal->last_pkt_props->pts < s->output_frames[0].pts &&
-           av_fifo_can_read(avctx->internal->pkt_props)) {
-        av_packet_unref(avctx->internal->last_pkt_props);
-        av_fifo_read(avctx->internal->pkt_props, avctx->internal->last_pkt_props, 1);
-    }
-
     if ((err = ff_decode_frame_props(avctx, frame)) < 0)
         return err;
 
@@ -1478,11 +1470,10 @@ static const AVOption options[] = {
         .priv_data_size   = sizeof(EAEContext), \
         .init             = eae_decode_init, \
         .close            = eae_close, \
-        .receive_frame    = eae_decode_receive_frame, \
+        FF_CODEC_RECEIVE_FRAME_CB(eae_decode_receive_frame), \
         .flush            = eae_flush, \
         .p.capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING, \
         .caps_internal    = FF_CODEC_CAP_SETS_PKT_DTS | \
-                            FF_CODEC_CAP_INIT_THREADSAFE | \
                             FF_CODEC_CAP_INIT_CLEANUP, \
         .p.priv_class     = &eae_##namev##dec_class, \
     };
@@ -1510,11 +1501,10 @@ FFEAE_DEC(mlp, "MLP", AV_CODEC_ID_MLP)
         .priv_data_size = sizeof(EAEContext), \
         .init           = eae_encode_init, \
         .close          = eae_close, \
-        .receive_packet = eae_encode_receive_packet, \
+        FF_CODEC_RECEIVE_PACKET_CB(eae_encode_receive_packet), \
         .flush          = eae_flush, \
         .p.capabilities = AV_CODEC_CAP_DELAY, \
         .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS | \
-                          FF_CODEC_CAP_INIT_THREADSAFE | \
                           FF_CODEC_CAP_INIT_CLEANUP, \
         .p.sample_fmts  = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLT, \
                                                           AV_SAMPLE_FMT_S16, \

@@ -403,7 +403,7 @@ const FFCodec ff_h264_mediacodecndk_encoder = {
     .p.id = AV_CODEC_ID_H264,
     .priv_data_size = sizeof(MediaCodecNDKEncoderContext),
     .init = mediacodecndk_encode_init,
-    .receive_packet = mediacodecndk_receive_packet,
+    FF_CODEC_RECEIVE_PACKET_CB(mediacodecndk_receive_packet),
     .close = mediacodecndk_encode_close,
     .p.capabilities = AV_CODEC_CAP_DELAY,
     .p.priv_class = &mediacodecndk_class,

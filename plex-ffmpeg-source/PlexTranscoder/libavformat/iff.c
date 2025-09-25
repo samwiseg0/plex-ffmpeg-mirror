@@ -217,7 +217,7 @@ static int parse_dsd_diin(AVFormatContext *s, AVStream *st, uint64_t eof)
 {
     AVIOContext *pb = s->pb;
 
-    while (avio_tell(pb) + 12 <= eof && !avio_feof(pb)) {
+    while (av_sat_add64(avio_tell(pb), 12) <= eof && !avio_feof(pb)) {
         uint32_t tag      = avio_rl32(pb);
         uint64_t size     = avio_rb64(pb);
         uint64_t orig_pos = avio_tell(pb);
@@ -254,7 +254,7 @@ static int parse_dsd_prop(AVFormatContext *s, AVStream *st, uint64_t eof)
     int dsd_layout[6];
     ID3v2ExtraMeta *id3v2_extra_meta;
 
-    while (avio_tell(pb) + 12 <= eof && !avio_feof(pb)) {
+    while (av_sat_add64(avio_tell(pb), 12) <= eof && !avio_feof(pb)) {
         uint32_t tag      = avio_rl32(pb);
         uint64_t size     = avio_rb64(pb);
         uint64_t orig_pos = avio_tell(pb);
@@ -278,7 +278,7 @@ static int parse_dsd_prop(AVFormatContext *s, AVStream *st, uint64_t eof)
                 return AVERROR_INVALIDDATA;
             st->codecpar->ch_layout.order       = AV_CHANNEL_ORDER_UNSPEC;
             st->codecpar->ch_layout.nb_channels = avio_rb16(pb);
-            if (size < 2 + st->codecpar->ch_layout.nb_channels * 4)
+            if (size < 2 + st->codecpar->ch_layout.nb_channels * 4 || !st->codecpar->ch_layout.nb_channels)
                 return AVERROR_INVALIDDATA;
             if (st->codecpar->ch_layout.nb_channels > FF_ARRAY_ELEMS(dsd_layout)) {
                 avpriv_request_sample(s, "channel layout");
@@ -358,6 +358,9 @@ static int read_dst_frame(AVFormatContext *s, AVPacket *pkt)
     uint64_t chunk_pos, data_pos, data_size;
     int ret = AVERROR_EOF;
 
+    if (s->nb_streams < 1)
+        return AVERROR_INVALIDDATA;
+
     while (!avio_feof(pb)) {
         chunk_pos = avio_tell(pb);
         if (chunk_pos >= iff->body_end)
@@ -384,7 +387,7 @@ static int read_dst_frame(AVFormatContext *s, AVPacket *pkt)
                 avio_skip(pb, 1);
             pkt->flags |= AV_PKT_FLAG_KEY;
             pkt->stream_index = 0;
-            pkt->duration = 588LL * s->streams[0]->codecpar->sample_rate / 44100;
+            pkt->duration = s->streams[0]->codecpar->sample_rate / 75;
             pkt->pos = chunk_pos;
 
             chunk_pos = avio_tell(pb);
@@ -397,7 +400,8 @@ static int read_dst_frame(AVFormatContext *s, AVPacket *pkt)
         case ID_FRTE:
             if (data_size < 4)
                 return AVERROR_INVALIDDATA;
-            s->streams[0]->duration = avio_rb32(pb) * 588LL * s->streams[0]->codecpar->sample_rate / 44100;
+            s->streams[0]->duration = avio_rb32(pb) * (uint64_t)s->streams[0]->codecpar->sample_rate / 75;
+
             break;
         }
 
@@ -491,6 +495,8 @@ static int iff_read_header(AVFormatContext *s)
                 st->codecpar->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
             else if (st->codecpar->ch_layout.nb_channels == 2)
                 st->codecpar->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+            else if (st->codecpar->ch_layout.nb_channels == 0)
+                return AVERROR_INVALIDDATA;
             break;
 
         case ID_ABIT:
@@ -500,6 +506,9 @@ static int iff_read_header(AVFormatContext *s)
         case ID_DST:
         case ID_MDAT:
             iff->body_pos = avio_tell(pb);
+            if (iff->body_pos < 0 || iff->body_pos + data_size > INT64_MAX)
+                return AVERROR_INVALIDDATA;
+
             iff->body_end = iff->body_pos + data_size;
             iff->body_size = data_size;
             if (chunk_id == ID_DST) {
