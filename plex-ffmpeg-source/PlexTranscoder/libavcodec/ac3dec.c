@@ -38,7 +38,6 @@
 #include "libavutil/opt.h"
 #include "libavutil/thread.h"
 #include "bswapdsp.h"
-#include "aac_ac3_parser.h"
 #include "ac3_parser_internal.h"
 #include "ac3dec.h"
 #include "ac3dec_data.h"
@@ -260,71 +259,6 @@ static av_cold int ac3_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-/**
- * Parse the 'sync info' and 'bit stream info' from the AC-3 bitstream.
- * GetBitContext within AC3DecodeContext must point to
- * the start of the synchronized AC-3 bitstream.
- */
-static int ac3_parse_header(AC3DecodeContext *s)
-{
-    GetBitContext *gbc = &s->gbc;
-    int i;
-
-    /* read the rest of the bsi. read twice for dual mono mode. */
-    i = !s->channel_mode;
-    do {
-        s->dialog_normalization[(!s->channel_mode)-i] = -get_bits(gbc, 5);
-        if (s->dialog_normalization[(!s->channel_mode)-i] == 0) {
-            s->dialog_normalization[(!s->channel_mode)-i] = -31;
-        }
-        if (s->target_level != 0) {
-            s->level_gain[(!s->channel_mode)-i] = powf(2.0f,
-                (float)(s->target_level -
-                s->dialog_normalization[(!s->channel_mode)-i])/6.0f);
-        }
-        if (s->compression_exists[(!s->channel_mode)-i] = get_bits1(gbc)) {
-            s->heavy_dynamic_range[(!s->channel_mode)-i] =
-                AC3_HEAVY_RANGE(get_bits(gbc, 8));
-        }
-        if (get_bits1(gbc))
-            skip_bits(gbc, 8); //skip language code
-        if (get_bits1(gbc))
-            skip_bits(gbc, 7); //skip audio production information
-    } while (i--);
-
-    skip_bits(gbc, 2); //skip copyright bit and original bitstream bit
-
-    /* skip the timecodes or parse the Alternate Bit Stream Syntax */
-    if (s->bitstream_id != 6) {
-        if (get_bits1(gbc))
-            skip_bits(gbc, 14); //skip timecode1
-        if (get_bits1(gbc))
-            skip_bits(gbc, 14); //skip timecode2
-    } else {
-        if (get_bits1(gbc)) {
-            s->preferred_downmix       = get_bits(gbc, 2);
-            s->center_mix_level_ltrt   = get_bits(gbc, 3);
-            s->surround_mix_level_ltrt = av_clip(get_bits(gbc, 3), 3, 7);
-            s->center_mix_level        = get_bits(gbc, 3);
-            s->surround_mix_level      = av_clip(get_bits(gbc, 3), 3, 7);
-        }
-        if (get_bits1(gbc)) {
-            s->dolby_surround_ex_mode = get_bits(gbc, 2);
-            s->dolby_headphone_mode   = get_bits(gbc, 2);
-            skip_bits(gbc, 10); // skip adconvtyp (1), xbsi2 (8), encinfo (1)
-        }
-    }
-
-    /* skip additional bitstream info */
-    if (get_bits1(gbc)) {
-        i = get_bits(gbc, 6);
-        do {
-            skip_bits(gbc, 8);
-        } while (i--);
-    }
-
-    return 0;
-}
 
 /**
  * Common function to parse AC-3 or E-AC-3 frame header
@@ -383,10 +317,25 @@ static int parse_frame_header(AC3DecodeContext *s)
         s->dba_syntax            = 1;
         s->skip_syntax           = 1;
         memset(s->channel_uses_aht, 0, sizeof(s->channel_uses_aht));
-        return ac3_parse_header(s);
+        /* volume control params */
+        for (int i = 0; i < (s->channel_mode ? 1 : 2); i++) {
+            s->dialog_normalization[i] = hdr.dialog_normalization[i];
+            if (s->dialog_normalization[i] == 0) {
+                s->dialog_normalization[i] = -31;
+            }
+            if (s->target_level != 0) {
+                s->level_gain[i] = powf(2.0f,
+                    (float)(s->target_level - s->dialog_normalization[i])/6.0f);
+            }
+            s->compression_exists[i] = hdr.compression_exists[i];
+            if (s->compression_exists[i]) {
+                s->heavy_dynamic_range[i] = AC3_HEAVY_RANGE(hdr.heavy_dynamic_range[i]);
+            }
+        }
+        return 0;
     } else if (CONFIG_EAC3_DECODER) {
         s->eac3 = 1;
-        return ff_eac3_parse_header(s);
+        return ff_eac3_parse_header(s, &hdr);
     } else {
         av_log(s->avctx, AV_LOG_ERROR, "E-AC-3 support not compiled in\n");
         return AVERROR(ENOSYS);
@@ -1545,19 +1494,19 @@ dependent_frame:
 
     if (err) {
         switch (err) {
-        case AAC_AC3_PARSE_ERROR_SYNC:
+        case AC3_PARSE_ERROR_SYNC:
             av_log(avctx, AV_LOG_ERROR, "frame sync error\n");
             return AVERROR_INVALIDDATA;
-        case AAC_AC3_PARSE_ERROR_BSID:
+        case AC3_PARSE_ERROR_BSID:
             av_log(avctx, AV_LOG_ERROR, "invalid bitstream id\n");
             break;
-        case AAC_AC3_PARSE_ERROR_SAMPLE_RATE:
+        case AC3_PARSE_ERROR_SAMPLE_RATE:
             av_log(avctx, AV_LOG_ERROR, "invalid sample rate\n");
             break;
-        case AAC_AC3_PARSE_ERROR_FRAME_SIZE:
+        case AC3_PARSE_ERROR_FRAME_SIZE:
             av_log(avctx, AV_LOG_ERROR, "invalid frame size\n");
             break;
-        case AAC_AC3_PARSE_ERROR_FRAME_TYPE:
+        case AC3_PARSE_ERROR_FRAME_TYPE:
             /* skip frame if CRC is ok. otherwise use error concealment. */
             /* TODO: add support for substreams */
             if (s->substreamid) {
@@ -1570,8 +1519,10 @@ dependent_frame:
                 av_log(avctx, AV_LOG_ERROR, "invalid frame type\n");
             }
             break;
-        case AAC_AC3_PARSE_ERROR_CRC:
-        case AAC_AC3_PARSE_ERROR_CHANNEL_CFG:
+       case AC3_PARSE_ERROR_CHANNEL_MAP:
+            av_log(avctx, AV_LOG_ERROR, "invalid channel map\n");
+            return AVERROR_INVALIDDATA;
+        case AC3_PARSE_ERROR_CRC:
             break;
         default: // Normal AVERROR do not try to recover.
             *got_frame_ptr = 0;
@@ -1581,7 +1532,7 @@ dependent_frame:
         /* check that reported frame size fits in input buffer */
         if (s->frame_size > buf_size) {
             av_log(avctx, AV_LOG_ERROR, "incomplete frame\n");
-            err = AAC_AC3_PARSE_ERROR_FRAME_SIZE;
+            err = AC3_PARSE_ERROR_FRAME_SIZE;
         } else if (avctx->err_recognition & (AV_EF_CRCCHECK|AV_EF_CAREFUL)) {
             /* check for crc mismatch */
             if (av_crc(av_crc_get_table(AV_CRC_16_ANSI), 0, &buf[2],
@@ -1589,7 +1540,7 @@ dependent_frame:
                 av_log(avctx, AV_LOG_ERROR, "frame CRC mismatch\n");
                 if (avctx->err_recognition & AV_EF_EXPLODE)
                     return AVERROR_INVALIDDATA;
-                err = AAC_AC3_PARSE_ERROR_CRC;
+                err = AC3_PARSE_ERROR_CRC;
             }
         }
     }

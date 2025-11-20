@@ -474,6 +474,33 @@ int avformat_init_output(AVFormatContext *s, AVDictionary **options)
     return AVSTREAM_INIT_IN_WRITE_HEADER;
 }
 
+static int write_header(AVFormatContext* s)
+{
+  int ret;
+  FFFormatContext* const si = ffformatcontext(s);
+
+  if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
+    avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_HEADER);
+
+  if (!si->header_written && ffofmt(s->oformat)->write_header) {
+    if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
+      avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_HEADER);
+    ret = ffofmt(s->oformat)->write_header(s);
+    if (ret >= 0 && s->pb && s->pb->error < 0)
+      ret = s->pb->error;
+    if (ret < 0)
+      return ret;
+    flush_if_needed(s);
+  }
+
+  si->header_written = 1;
+
+  if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
+    avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_UNKNOWN);
+
+  return 1;
+}
+
 int avformat_write_header(AVFormatContext *s, AVDictionary **options)
 {
     FFFormatContext *const si = ffformatcontext(s);
@@ -485,15 +512,9 @@ int avformat_write_header(AVFormatContext *s, AVDictionary **options)
         if ((ret = avformat_init_output(s, options)) < 0)
             return ret;
 
-    if (ffofmt(s->oformat)->write_header) {
-        if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
-            avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_HEADER);
-        ret = ffofmt(s->oformat)->write_header(s);
-        if (ret >= 0 && s->pb && s->pb->error < 0)
-            ret = s->pb->error;
-        if (ret < 0)
-            goto fail;
-        flush_if_needed(s);
+    if (!(ffofmt(s->oformat)->check_bitstream && s->flags & AVFMT_FLAG_AUTO_BSF)) {
+        if(write_header(s) < 0)
+          goto fail;
     }
     if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
         avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_UNKNOWN);
@@ -750,6 +771,10 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
     }
     handle_avoid_negative_ts(si, sti, pkt);
 
+    ret = write_header(s);
+    if (ret < 0)
+      return ret;
+
     if ((pkt->flags & AV_PKT_FLAG_UNCODED_FRAME)) {
         AVFrame **frame = (AVFrame **)pkt->data;
         av_assert0(pkt->size == sizeof(*frame));
@@ -766,6 +791,7 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
 
     if (ret >= 0)
         st->nb_frames++;
+
 
     return ret;
 }
@@ -1311,7 +1337,11 @@ int av_write_trailer(AVFormatContext *s)
     if (ret >= 0)
         ret = ret1;
 
-    if (ffofmt(s->oformat)->write_trailer) {
+    ret1 = write_header(s);
+    if (ret >= 0)
+      ret = ret1;
+
+    if ((ffformatcontext(s)->header_written || !ffofmt(s->oformat)->write_header) && ffofmt(s->oformat)->write_trailer) {
         if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
             avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_TRAILER);
         ret1 = ffofmt(s->oformat)->write_trailer(s);

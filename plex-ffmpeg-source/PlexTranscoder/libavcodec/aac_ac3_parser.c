@@ -104,11 +104,16 @@ get_next:
 
             buf += offset;
             buf_size -= offset;
+            uint64_t layout = 0;
             while (buf_size > 0) {
                 int ret = avpriv_ac3_parse_header(&phrd, buf, buf_size);
 
                 if (ret < 0 || hdr.frame_size > buf_size)
                     return i;
+                
+                layout |= hdr.channel_layout;
+                if (av_popcount64(hdr.channel_layout) > EAC3_MAX_CHANNELS)
+                  return AAC_AC3_PARSE_ERROR_CHANNEL_CFG;
 
                 if (buf_size > hdr.frame_size) {
                     buf += hdr.frame_size;
@@ -122,6 +127,7 @@ get_next:
                 break;
             }
 
+            hdr.channel_layout = layout;
             avctx->sample_rate = hdr.sample_rate;
 
             if (hdr.bitstream_id > 10)

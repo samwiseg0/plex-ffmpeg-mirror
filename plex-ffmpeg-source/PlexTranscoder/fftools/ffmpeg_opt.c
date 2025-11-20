@@ -698,7 +698,7 @@ int find_codec(void *logctx, const char *name,
         return encoder ? AVERROR_ENCODER_NOT_FOUND :
                          AVERROR_DECODER_NOT_FOUND;
     }
-    if (codec->type != type && !recast_media) {
+    if (codec->type != type && type != AVMEDIA_TYPE_UNKNOWN && !recast_media) {
         av_log(logctx, AV_LOG_FATAL, "Invalid %s type '%s'\n", codec_string, name);
         return AVERROR(EINVAL);
     }

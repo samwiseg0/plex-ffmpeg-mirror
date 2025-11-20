@@ -344,6 +344,10 @@ int enc_open(OutputStream *ost, const AVFrame *frame)
                "Error initializing the output stream codec context.\n");
         return ret;
     }
+    
+    //PLEX: hack for nvidia; remove once they fix their scaler
+      ost->st->sample_aspect_ratio = ost->st->codecpar->sample_aspect_ratio;
+    //PLEX
 
     /*
      * Add global input side data. For now this is naive, and copies it

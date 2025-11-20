@@ -189,6 +189,12 @@ typedef struct FFFormatContext {
      * Contexts and child contexts do not contain a metadata option
      */
     int metafree;
+    
+    
+    /**
+     * Whether or not a header has already been written
+     */
+    int header_written;
 } FFFormatContext;
 
 static av_always_inline FFFormatContext *ffformatcontext(AVFormatContext *s)

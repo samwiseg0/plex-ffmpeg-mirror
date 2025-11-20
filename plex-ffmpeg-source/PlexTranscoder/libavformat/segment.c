@@ -439,6 +439,11 @@ static int segment_end(AVFormatContext *s, int write_trailer, int is_last)
     av_write_frame(oc, NULL); /* Flush any buffered data (fragmented mp4) */
     if (write_trailer)
         ret = av_write_trailer(oc);
+    
+    // PLEX
+    // make sure everything is written to the file system before we mark the file as done
+    avio_flush(oc->pb);
+    //PLEX
 
     if (ret < 0)
         av_log(s, AV_LOG_ERROR, "Failure occurred when ending segment '%s'\n",

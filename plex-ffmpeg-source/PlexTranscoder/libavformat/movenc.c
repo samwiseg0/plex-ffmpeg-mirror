@@ -120,6 +120,9 @@ static const AVOption options[] = {
     { "pts", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = MOV_PRFT_SRC_PTS}, 0, 0, AV_OPT_FLAG_ENCODING_PARAM, "prft"},
     { "empty_hdlr_name", "write zero-length name string in hdlr atoms within mdia and minf atoms", offsetof(MOVMuxContext, empty_hdlr_name), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
     { "movie_timescale", "set movie timescale", offsetof(MOVMuxContext, movie_timescale), AV_OPT_TYPE_INT, {.i64 = MOV_TIMESCALE}, 1, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM},
+//PLEX
+    { "mov_res", "Override resolution of video", offsetof(MOVMuxContext, video_width), AV_OPT_TYPE_IMAGE_SIZE, .flags = AV_OPT_FLAG_ENCODING_PARAM },
+//PLEX
     { NULL },
 };
 
@@ -408,11 +411,11 @@ static int mov_write_ac3_tag(AVFormatContext *s, AVIOContext *pb, MOVTrack *trac
     return 11;
 }
 
-static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+static int parse_eac3(MOVMuxContext *mov, const AVPacket *pkt, MOVTrack *track, int *num_blocks)
 {
     AC3HeaderInfo *hdr = NULL;
     struct eac3_info *info;
-    int num_blocks, ret;
+    int ret = 1;
 
     if (!track->eac3_priv) {
         if (!(track->eac3_priv = av_mallocz(sizeof(*info))))
@@ -441,7 +444,8 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
     info->data_rate = FFMAX(info->data_rate, hdr->bit_rate / 1000);
     info->ac3_bit_rate_code = FFMAX(info->ac3_bit_rate_code,
                                     hdr->ac3_bit_rate_code);
-    num_blocks = hdr->num_blocks;
+    if (num_blocks)
+        *num_blocks = hdr->num_blocks;
 
     if (!info->ec3_done) {
         /* AC-3 substream must be the first one */
@@ -468,7 +472,7 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
             } else if (hdr->substreamid < info->num_ind_sub ||
                        hdr->substreamid == 0 && info->substream[0].bsid) {
                 info->ec3_done = 1;
-                goto concatenate;
+                goto end;
             }
         } else {
             if (hdr->substreamid != 0) {
@@ -490,7 +494,7 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
             // so we can finish as soon as the basic values of the bit stream
             // have been set to the track's informational structure.
             info->ec3_done = 1;
-            goto concatenate;
+            goto end;
         }
 
         /* Parse dependent substream(s), if any */
@@ -499,8 +503,6 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
             int parent = hdr->substreamid;
 
             while (cumul_size != pkt->size) {
-                GetBitContext gbc;
-                int i;
                 ret = avpriv_ac3_parse_header(&hdr, pkt->data + cumul_size, pkt->size - cumul_size);
                 if (ret < 0)
                     goto end;
@@ -511,20 +513,9 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
                 info->substream[parent].num_dep_sub++;
                 ret /= 8;
 
-                /* header is parsed up to lfeon, but custom channel map may be needed */
-                init_get_bits8(&gbc, pkt->data + cumul_size + ret, pkt->size - cumul_size - ret);
-                /* skip bsid */
-                skip_bits(&gbc, 5);
-                /* skip volume control params */
-                for (i = 0; i < (hdr->channel_mode ? 1 : 2); i++) {
-                    skip_bits(&gbc, 5); // skip dialog normalization
-                    if (get_bits1(&gbc)) {
-                        skip_bits(&gbc, 8); // skip compression gain word
-                    }
-                }
                 /* get the dependent stream channel map, if exists */
-                if (get_bits1(&gbc))
-                    info->substream[parent].chan_loc |= (get_bits(&gbc, 16) >> 5) & 0x1f;
+                if (hdr->channel_map_present)
+                    info->substream[parent].chan_loc |= (hdr->channel_map >> 5) & 0x1f;
                 else
                     info->substream[parent].chan_loc |= hdr->channel_mode;
                 cumul_size += hdr->frame_size;
@@ -532,39 +523,48 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
         }
     }
 
-concatenate:
+end:
+    av_free(hdr);
+
+    return ret;
+}
+
+static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+{
+    int num_blocks;
+    struct eac3_info *info;
+    int ret = parse_eac3(mov, pkt, track, &num_blocks);
+    if (ret <= 0)
+        return ret;
+
+    info = track->eac3_priv;
+
     if (!info->num_blocks && num_blocks == 6) {
-        ret = pkt->size;
-        goto end;
+        return pkt->size;
     }
     else if (info->num_blocks + num_blocks > 6) {
-        ret = AVERROR_INVALIDDATA;
-        goto end;
+        return AVERROR_INVALIDDATA;
     }
 
     if (!info->num_blocks) {
         ret = av_packet_ref(info->pkt, pkt);
         if (!ret)
             info->num_blocks = num_blocks;
-        goto end;
+        return ret;
     } else {
         if ((ret = av_grow_packet(info->pkt, pkt->size)) < 0)
-            goto end;
+            return ret;
         memcpy(info->pkt->data + info->pkt->size - pkt->size, pkt->data, pkt->size);
         info->num_blocks += num_blocks;
         info->pkt->duration += pkt->duration;
         if (info->num_blocks != 6)
-            goto end;
+            return ret;
         av_packet_unref(pkt);
         av_packet_move_ref(pkt, info->pkt);
         info->num_blocks = 0;
     }
-    ret = pkt->size;
 
-end:
-    av_free(hdr);
-
-    return ret;
+    return pkt->size;
 }
 
 static int mov_write_eac3_tag(AVFormatContext *s, AVIOContext *pb, MOVTrack *track)
@@ -2327,7 +2327,7 @@ static int mov_write_video_tag(AVFormatContext *s, AVIOContext *pb, MOVMuxContex
     } else {
         ffio_fill(pb, 0, 3 * 4); /* Reserved */
     }
-    avio_wb16(pb, track->par->width); /* Video width */
+    avio_wb16(pb, mov->video_width ? mov->video_width : track->par->width); /* PLEX: Video width */
     avio_wb16(pb, track->height); /* Video height */
     avio_wb32(pb, 0x00480000); /* Horizontal resolution 72dpi */
     avio_wb32(pb, 0x00480000); /* Vertical resolution 72dpi */
@@ -3472,15 +3472,15 @@ static int mov_write_tkhd_tag(AVIOContext *pb, MOVMuxContext *mov,
                track->par->codec_type == AVMEDIA_TYPE_SUBTITLE)) {
         int64_t track_width_1616;
         if (track->mode == MODE_MOV || track->mode == MODE_AVIF) {
-            track_width_1616 = track->par->width * 0x10000ULL;
+            track_width_1616 = (mov->video_width ? mov->video_width : track->par->width) * 0x10000ULL;
         } else {
             track_width_1616 = av_rescale(st->sample_aspect_ratio.num,
-                                                  track->par->width * 0x10000LL,
+                                                  (mov->video_width ? mov->video_width : track->par->width) * 0x10000LL,
                                                   st->sample_aspect_ratio.den);
             if (!track_width_1616 ||
                 track->height != track->par->height ||
                 track_width_1616 > UINT32_MAX)
-                track_width_1616 = track->par->width * 0x10000ULL;
+                track_width_1616 = (mov->video_width ? mov->video_width : track->par->width) * 0x10000ULL;
         }
         if (track_width_1616 > UINT32_MAX) {
             av_log(mov->fc, AV_LOG_WARNING, "track width is too large\n");
@@ -7355,7 +7355,7 @@ static int mov_init(AVFormatContext *s)
             track->timescale = mov->movie_timescale;
         }
         if (!track->height)
-            track->height = st->codecpar->height;
+            track->height = mov->video_height ? mov->video_height : st->codecpar->height; /* PLEX */
         /* The Protected Interoperable File Format (PIFF) standard, used by ISMV recommends but
            doesn't mandate a track timescale of 10,000,000. The muxer allows a custom timescale
            for video tracks, so if user-set, it isn't overwritten */
@@ -7750,12 +7750,26 @@ static int mov_check_bitstream(AVFormatContext *s, AVStream *st,
                                const AVPacket *pkt)
 {
     int ret = 1;
+    MOVMuxContext *mov = s->priv_data;
+    MOVTrack *trk = &mov->tracks[pkt->stream_index];
 
     if (st->codecpar->codec_id == AV_CODEC_ID_AAC) {
         if (pkt->size > 2 && (AV_RB16(pkt->data) & 0xfff0) == 0xfff0)
             ret = ff_stream_add_bitstream_filter(st, "aac_adtstoasc", NULL);
     } else if (st->codecpar->codec_id == AV_CODEC_ID_VP9) {
         ret = ff_stream_add_bitstream_filter(st, "vp9_superframe", NULL);
+} else if ((st->codecpar->codec_id == AV_CODEC_ID_DNXHD ||
+                st->codecpar->codec_id == AV_CODEC_ID_AC3) && !trk->vos_len) {
+        /* copy frame to create needed atoms */
+        trk->vos_len  = pkt->size;
+        trk->vos_data = av_malloc(pkt->size);
+        if (!trk->vos_data)
+            return AVERROR(ENOMEM);
+        memcpy(trk->vos_data, pkt->data, pkt->size);
+    } else if (st->codecpar->codec_id == AV_CODEC_ID_EAC3) {
+        ret = parse_eac3(mov, pkt, trk, NULL);
+        if (ret < 0)
+            ret = 0;
     }
 
     return ret;
