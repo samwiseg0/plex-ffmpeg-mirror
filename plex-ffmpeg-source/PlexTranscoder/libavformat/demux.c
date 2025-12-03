@@ -3011,7 +3011,17 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
 #if FF_API_AVSTREAM_SIDE_DATA
 FF_DISABLE_DEPRECATION_WARNINGS
         if (st->codecpar->nb_coded_side_data > 0) {
-            av_assert0(!st->side_data && !st->nb_side_data);
+//PLEX            
+            // trust the codecpar side_data more
+            if(st->nb_side_data)
+            {
+              av_assert0(st->side_data);
+              for (i = 0; i < st->nb_side_data; i++)
+                av_freep(&st->side_data[i].data);
+              av_freep(&st->side_data);
+              st->nb_side_data = 0;
+            }
+// PLEX
             st->side_data = av_calloc(st->codecpar->nb_coded_side_data, sizeof(*st->side_data));
             if (!st->side_data) {
                 ret = AVERROR(ENOMEM);

@@ -7758,7 +7758,7 @@ static int mov_check_bitstream(AVFormatContext *s, AVStream *st,
             ret = ff_stream_add_bitstream_filter(st, "aac_adtstoasc", NULL);
     } else if (st->codecpar->codec_id == AV_CODEC_ID_VP9) {
         ret = ff_stream_add_bitstream_filter(st, "vp9_superframe", NULL);
-} else if ((st->codecpar->codec_id == AV_CODEC_ID_DNXHD ||
+    } else if ((st->codecpar->codec_id == AV_CODEC_ID_DNXHD ||
                 st->codecpar->codec_id == AV_CODEC_ID_AC3) && !trk->vos_len) {
         /* copy frame to create needed atoms */
         trk->vos_len  = pkt->size;
@@ -7767,6 +7767,8 @@ static int mov_check_bitstream(AVFormatContext *s, AVStream *st,
             return AVERROR(ENOMEM);
         memcpy(trk->vos_data, pkt->data, pkt->size);
     } else if (st->codecpar->codec_id == AV_CODEC_ID_EAC3) {
+        if(!trk->par)
+            trk->par = st->codecpar;
         ret = parse_eac3(mov, pkt, trk, NULL);
         if (ret < 0)
             ret = 0;
