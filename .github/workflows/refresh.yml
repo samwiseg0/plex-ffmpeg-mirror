@@ -30,15 +30,41 @@ jobs:
         run: zsh tools/fetch-plex-ffmpeg.zsh
 
       - name: Commit changes if any
+        id: commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [[ -z "$(git status --porcelain)" ]]; then
             echo "No changes to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          version="$(cat latest.version 2>/dev/null || echo unknown)"
+          version="$(sed -n 's/^plex=//p' latest.version 2>/dev/null || true)"
+          version="${version:-unknown}"
           git add -A
           git commit -m "Automated update - synchronized with Plex version ${version} on $(date -u --rfc-3339=seconds)"
           git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and release new version
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.commit.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          # Skip if this version was already tagged (e.g. a re-run).
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null \
+             || git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists; skipping."
+            exit 0
+          fi
+          git tag -a "${tag}" -m "Plex FFMPEG source for Plex version ${VERSION}"
+          git push origin "${tag}"
+          gh release create "${tag}" \
+            --title "${tag}" \
+            --notes "Mirrored Plex FFMPEG GPL source for Plex Media Server version \`${VERSION}\`."
+

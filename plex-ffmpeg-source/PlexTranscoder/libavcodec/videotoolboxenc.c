@@ -1784,9 +1784,32 @@ static int is_post_sei_nal_type(int nal_type){
            nal_type != H264_NAL_AUD;
 }
 
+/* Reads one RBSP byte from a NAL starting at *pos, transparently skipping
+ * H.264 emulation prevention bytes (the 0x03 in any 0x00 0x00 0x03 sequence).
+ * Returns the RBSP byte on success, or -1 if the wire buffer is exhausted. */
+static int read_sei_rbsp_byte(const uint8_t *nal_data, size_t nal_size,
+                              size_t *pos, int *zero_run)
+{
+    uint8_t b;
+
+    if (*zero_run >= 2 && *pos < nal_size && nal_data[*pos] == 0x03) {
+        (*pos)++;
+        *zero_run = 0;
+    }
+    if (*pos >= nal_size)
+        return -1;
+
+    b = nal_data[(*pos)++];
+    if (b == 0) (*zero_run)++;
+    else        *zero_run = 0;
+    return b;
+}
+
 /*
- * Finds the sei message start/size of type find_sei_type.
- * If more than one of that type exists, the last one is returned.
+ * Finds the end of the SEI payloads in a NAL unit, accounting for H.264
+ * emulation prevention bytes. *sei_end is set to the wire position just past
+ * the last existing payload (i.e. where new SEI bytes can be appended before
+ * the rbsp_trailing_bits).
  */
 static int find_sei_end(AVCodecContext *avctx,
                         uint8_t        *nal_data,
@@ -1794,52 +1817,54 @@ static int find_sei_end(AVCodecContext *avctx,
                         uint8_t       **sei_end)
 {
     int nal_type;
-    size_t sei_payload_size = 0;
-    uint8_t *nal_start = nal_data;
+    size_t pos = 0;
+    int zero_run = 0;
     *sei_end = NULL;
 
     if (!nal_size)
         return 0;
 
-    nal_type = *nal_data & 0x1F;
+    nal_type = nal_data[0] & 0x1F;
     if (nal_type != H264_NAL_SEI)
         return 0;
 
-    nal_data++;
-    nal_size--;
+    pos = 1;
 
-    if (nal_data[nal_size - 1] == 0x80)
+    if (nal_size > pos && nal_data[nal_size - 1] == 0x80)
         nal_size--;
 
-    while (nal_size > 0 && *nal_data > 0) {
-        do{
-            nal_data++;
-            nal_size--;
-        } while (nal_size > 0 && *nal_data == 0xFF);
+    while (pos < nal_size && nal_data[pos] != 0) {
+        int b;
+        size_t payload_size = 0;
 
-        if (!nal_size) {
-            av_log(avctx, AV_LOG_ERROR, "Unexpected end of SEI NAL Unit parsing type.\n");
-            return AVERROR_INVALIDDATA;
+        do {
+            b = read_sei_rbsp_byte(nal_data, nal_size, &pos, &zero_run);
+            if (b < 0) {
+                av_log(avctx, AV_LOG_ERROR, "Unexpected end of SEI NAL Unit parsing type.\n");
+                return AVERROR_INVALIDDATA;
+            }
+        } while (b == 0xFF);
+
+        do {
+            b = read_sei_rbsp_byte(nal_data, nal_size, &pos, &zero_run);
+            if (b < 0) {
+                av_log(avctx, AV_LOG_ERROR, "Unexpected end of SEI NAL Unit parsing size.\n");
+                return AVERROR_INVALIDDATA;
+            }
+            payload_size += (uint8_t)b;
+        } while (b == 0xFF);
+
+        while (payload_size--) {
+            if (read_sei_rbsp_byte(nal_data, nal_size, &pos, &zero_run) < 0) {
+                av_log(avctx, AV_LOG_ERROR, "Unexpected end of SEI NAL Unit parsing size.\n");
+                return AVERROR_INVALIDDATA;
+            }
         }
-
-        do{
-            sei_payload_size += *nal_data;
-            nal_data++;
-            nal_size--;
-        } while (nal_size > 0 && *nal_data == 0xFF);
-
-        if (nal_size < sei_payload_size) {
-            av_log(avctx, AV_LOG_ERROR, "Unexpected end of SEI NAL Unit parsing size.\n");
-            return AVERROR_INVALIDDATA;
-        }
-
-        nal_data += sei_payload_size;
-        nal_size -= sei_payload_size;
     }
 
-    *sei_end = nal_data;
+    *sei_end = nal_data + pos;
 
-    return nal_data - nal_start + 1;
+    return pos + 1;
 }
 
 /**

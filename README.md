@@ -12,11 +12,17 @@ of your own is required -- GitHub runs it for you.
 ```
 .github/workflows/refresh.yml   # the scheduled job
 tools/fetch-plex-ffmpeg.zsh     # downloads + unpacks the source
+tools/backfill.zsh              # backfills history from local PMS tarballs
 plex-ffmpeg-source/             # the mirrored source (committed by the workflow)
-  NewPlexTranscoder/
-  PlexTranscoder/
-latest.version                  # last Plex version that was mirrored
+  PlexTranscoder/               # Plex's single ffmpeg GPL source
+latest.version                  # mirrored Plex version + ffmpeg source hash
 ```
+
+Plex's LICENSE attributes its ffmpeg GPL source to "Plex Transcoder" (verified
+across every released version); there is no separate "new" transcoder, so the
+mirror keeps a single `PlexTranscoder/` folder. If Plex ever lists a second,
+distinct source, it lands in `PlexTranscoder-2/`.
+
 
 ## How it works
 

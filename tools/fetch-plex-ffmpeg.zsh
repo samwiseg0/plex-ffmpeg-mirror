@@ -17,8 +17,12 @@ typeset -gr REPO_PATH="${SCRIPT_PATH:h}"
 typeset -gr OUT_PATH="${1:-${REPO_PATH}/plex-ffmpeg-source}"
 typeset -gr WORK_PATH="${REPO_PATH}/run"
 typeset -gr PMS_PATH="${WORK_PATH}/pms"
-typeset -gr NEW_TC_PATH="${OUT_PATH}/NewPlexTranscoder"
-typeset -gr OLD_TC_PATH="${OUT_PATH}/PlexTranscoder"
+# The Plex LICENSE attributes its single ffmpeg GPL source to "Plex Transcoder"
+# (verified across every released version). There is no separate "new"
+# transcoder, so PlexTranscoder is the one canonical folder. In the unlikely
+# event Plex ever lists a second, distinct source, it lands in PlexTranscoder-2.
+typeset -gr TC_NAME="PlexTranscoder"
+typeset -gr TC_PATH="${OUT_PATH}/${TC_NAME}"
 typeset -gr VERSION_FILE="${REPO_PATH}/latest.version"
 
 die() {
@@ -69,6 +73,11 @@ download_and_extract() {
     return 0
 }
 
+# Maps each unpacked transcoder (by repo folder name) to the original ffmpeg
+# source directory name, which carries the full upstream commit hash, e.g.
+# plexinc-plex-media-server-ffmpeg-gpl-c75335c5e1ba5fa483dc6100c6a11c54e48f759f
+typeset -gA FFMPEG_SOURCE_DIRS
+
 # Download one ffmpeg source archive and unpack it into repo_path.
 unpack_ffmpeg_archive() {
     local url="$1" temp_path="$2" repo_path="$3"
@@ -88,15 +97,20 @@ unpack_ffmpeg_archive() {
         }
         typeset -a extracted_files; extracted_files=( "${temp_path}"/*(DN) )
         [[ ! -d "$repo_path" ]] || rm -rf "$repo_path" > /dev/null 2>&1
+        local source_name
         if (( ${#extracted_files[@]} == 1 )) && [[ -d "${extracted_files[1]}" ]]; then
+            # Preserve the original hash-bearing folder name before renaming.
+            source_name="${extracted_files[1]:t}"
             echo "Moving code from ${extracted_files[1]} to ${repo_path}"
             mv "${extracted_files[1]}" "${repo_path}"
         else
+            source_name="${url:t}"
             echo "Moving code from ${temp_path} to ${repo_path}"
             make_dir "${repo_path}"
             mv "${temp_path}"/*(DN) "${repo_path}"/
         fi
-        echo "Unpacked to ${repo_path}"
+        FFMPEG_SOURCE_DIRS[${repo_path:t}]="${source_name}"
+        echo "Unpacked to ${repo_path} (source: ${source_name})"
         return 0
     } =(curl --location --fail "$url")
     return $?
@@ -108,21 +122,47 @@ get_ffmpeg_archives_from_server() {
 
     local ffmpeg_url=''
     local -i ffct=0 unpacked=0
-    cat "$license_file" | grep -e 'http[s]*://[^/]*/.*$' -o | grep 'ffmpeg' | while read ffmpeg_url; do
-        if [[ $ffmpeg_url == *"plex-ffmpeg-"* ]]; then
-            unpack_ffmpeg_archive "${ffmpeg_url}" "${WORK_PATH}/new" "${NEW_TC_PATH}" && unpacked=1
-        elif [[ $ffmpeg_url == *"Plex"* ]]; then
-            unpack_ffmpeg_archive "${ffmpeg_url}" "${WORK_PATH}/old" "${OLD_TC_PATH}" && unpacked=1
-        elif (( ffct == 0 )); then
-            unpack_ffmpeg_archive "${ffmpeg_url}" "${WORK_PATH}/new" "${NEW_TC_PATH}" && unpacked=1
-        elif (( ffct == 1 )); then
-            unpack_ffmpeg_archive "${ffmpeg_url}" "${WORK_PATH}/old" "${OLD_TC_PATH}" && unpacked=1
+    # Process substitution (not a pipe) keeps the loop in the current shell so
+    # FFMPEG_SOURCE_DIRS set inside unpack_ffmpeg_archive survives the loop.
+    # The first (normally only) source goes to PlexTranscoder; any additional
+    # distinct source would go to PlexTranscoder-2, -3, ...
+    while read ffmpeg_url; do
+        local dest
+        if (( ffct == 0 )); then
+            dest="${TC_PATH}"
         else
-            echo "WARNING: Unidentified ffmpeg URL: $ffmpeg_url"
+            dest="${OUT_PATH}/${TC_NAME}-$((ffct + 1))"
         fi
+        unpack_ffmpeg_archive "${ffmpeg_url}" "${WORK_PATH}/src-${ffct}" "${dest}" && unpacked=1
         (( ffct++ ))
-    done
+    done < <(grep -oiE 'https?://[^[:space:]]*ffmpeg[^[:space:]]*' "$license_file" | awk '!seen[$0]++')
     (( unpacked == 1 )) && return 0 || return 1
+}
+
+# When every unpacked transcoder shares the same upstream ffmpeg source (same
+# hash-bearing folder name), keep a single canonical copy and drop the rest.
+# Plex lists one GPL ffmpeg source, so normally there is only one folder and
+# this is a no-op. It only matters if Plex ever lists multiple URLs that happen
+# to resolve to the same source.
+dedupe_identical_sources() {
+    local -a labels=( ${(k)FFMPEG_SOURCE_DIRS} )
+    (( ${#labels[@]} > 1 )) || return 0
+
+    local first="${FFMPEG_SOURCE_DIRS[${labels[1]}]}"
+    local l
+    for l in ${labels}; do
+        [[ "${FFMPEG_SOURCE_DIRS[$l]}" == "$first" ]] || return 0
+    done
+
+    # All identical: keep PlexTranscoder if present, else the first label.
+    local keep="${TC_NAME}"
+    [[ -n "${FFMPEG_SOURCE_DIRS[$keep]}" ]] || keep="${labels[1]}"
+    for l in ${labels}; do
+        [[ "$l" == "$keep" ]] && continue
+        rm -rf "${OUT_PATH}/$l"
+        unset "FFMPEG_SOURCE_DIRS[$l]"
+        echo "Removed duplicate ${l} (identical source to ${keep})"
+    done
 }
 
 make_dir "$OUT_PATH"
@@ -134,8 +174,19 @@ echo "Latest Plex FreeBSD version: $api_version"
 download_and_extract "$pms_url" "${PMS_PATH}" || die "Failed to download/extract PMS archive"
 
 if get_ffmpeg_archives_from_server; then
-    echo -n "$api_version" > "${VERSION_FILE}"
+    dedupe_identical_sources
+    # Record the Plex version plus the original hash-bearing ffmpeg source
+    # folder name (the rename to PlexTranscoder otherwise discards the upstream
+    # commit hash).
+    {
+        echo "plex=${api_version}"
+        for label in ${(ok)FFMPEG_SOURCE_DIRS}; do
+            echo "${label}=${FFMPEG_SOURCE_DIRS[$label]}"
+        done
+    } > "${VERSION_FILE}"
     echo "Done. FFMPEG source unpacked under: ${OUT_PATH}"
+    echo "Recorded versions:"
+    cat "${VERSION_FILE}"
 else
     echo "Done, but no ffmpeg source archives were unpacked (check the warnings above)."
 fi
