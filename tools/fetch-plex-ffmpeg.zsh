@@ -40,15 +40,27 @@ make_dir() {
 
 typeset -g api_version=''
 typeset -g pms_url=''
+# Plex downloads API. When PLEX_TOKEN is set (e.g. from a GitHub Actions secret)
+# the Plex Pass "plexpass" channel is queried, which exposes beta builds;
+# otherwise the public stable channel is used. The token is sent as an HTTP
+# header so it never appears in a URL or log line.
 query_pms_update_service() {
+    local -a curl_args=( --location --fail --silent )
+    local api_url="https://plex.tv/api/downloads/5.json"
+    if [[ -n "${PLEX_TOKEN:-}" ]]; then
+        api_url="${api_url}?channel=plexpass"
+        curl_args+=( --header "X-Plex-Token: ${PLEX_TOKEN}" )
+        echo "Querying PMS update service (Plex Pass / beta channel)"
+    else
+        echo "Querying PMS update service (public stable channel)"
+    fi
     () {
-        echo "Querying PMS update service at $1"
         [[ -n "$1" ]] || die "Update request is invalid"
         api_version="$(jq --raw-output '.computer.FreeBSD.version' "$1")"
         [[ -n "$api_version" ]] || die "Failed to get API version from update service"
         pms_url="$(jq --raw-output '.computer.FreeBSD.releases[0].url' "$1")"
         [[ -n "$pms_url" ]] || die "Failed to get archive URL from update service"
-    } =(curl --location --fail --silent "https://plex.tv/api/downloads/1.json")
+    } =(curl "${curl_args[@]}" "$api_url")
 }
 
 # Download a URL to a temp file and extract it into a target directory.
@@ -135,7 +147,7 @@ get_ffmpeg_archives_from_server() {
         fi
         unpack_ffmpeg_archive "${ffmpeg_url}" "${WORK_PATH}/src-${ffct}" "${dest}" && unpacked=1
         (( ffct++ ))
-    done < <(grep -oiE 'https?://[^[:space:]]*ffmpeg[^[:space:]]*' "$license_file" | awk '!seen[$0]++')
+    done < <(grep -oiE 'https?://[^[:space:]]+' "$license_file" | awk -F/ 'tolower($NF) ~ /ffmpeg/ && !seen[$0]++')
     (( unpacked == 1 )) && return 0 || return 1
 }
 

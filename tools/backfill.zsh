@@ -115,10 +115,31 @@ download_unpack() {
     return 0
 }
 
-# Parse unique ffmpeg URLs from a tarball's LICENSE into the global array URLS.
-typeset -ga URLS
-parse_urls() {
-    URLS=( ${(f)"$(license_of "$1" | grep -oiE 'https?://[^[:space:]]*ffmpeg[^[:space:]]*' | awk '!seen[$0]++')"} )
+# Parse each "... contains code from ffmpeg: <URL>" line from a tarball's
+# LICENSE into parallel arrays SRC_FOLDERS / SRC_URLS, mapping the attribution
+# to a folder: "Plex Transcoder" -> PlexTranscoder, "Plex Media Scanner and Plex
+# Media Server" -> PlexMediaServer. Keying on the "from ffmpeg:" attribution
+# naturally ignores sibling non-ffmpeg URLs (e.g. realtek-openmax).
+typeset -ga SRC_FOLDERS SRC_URLS
+parse_sources() {
+    SRC_FOLDERS=(); SRC_URLS=()
+    local line url prefix folder
+    while IFS= read -r line; do
+        url="${line##*ffmpeg:}"
+        url="${url#"${url%%[![:space:]]*}"}"   # strip leading whitespace
+        url="${url%%[[:space:]]*}"              # cut at first trailing whitespace
+        [[ "$url" == http://* || "$url" == https://* ]] || continue
+        prefix="${(L)line}"
+        if [[ "$prefix" == *transcoder* ]]; then
+            folder="PlexTranscoder"
+        elif [[ "$prefix" == *scanner* || "$prefix" == *"media server"* ]]; then
+            folder="PlexMediaServer"
+        else
+            folder="PlexTranscoder"
+        fi
+        SRC_FOLDERS+=( "$folder" )
+        SRC_URLS+=( "$url" )
+    done < <(license_of "$1" | grep -iE 'from ffmpeg:[[:space:]]*https?://')
 }
 
 # Materialize the source(s) for one version into the repo. Returns non-zero if
@@ -127,47 +148,42 @@ parse_urls() {
 typeset -g LAST_URL_KEY=""
 process_version() {
     local version="$1" tb="$2"
-    parse_urls "$tb"
-    (( ${#URLS[@]} )) || { print -r -- "  no ffmpeg URL; skipping"; return 1; }
+    parse_sources "$tb"
+    (( ${#SRC_URLS[@]} )) || { print -r -- "  no ffmpeg URL; skipping"; return 1; }
 
-    local url_key="${(j:|:)URLS}"
+    local url_key="${(j:|:)SRC_URLS}"
     typeset -A src_names
 
     if [[ "$url_key" == "$LAST_URL_KEY" && -d "$TC_PATH" ]]; then
         # Same source set as the previous version: reuse the existing tree(s).
         local f
-        for f in "${OUT_PATH}/${TC_NAME}"*(/N); do
+        for f in "${OUT_PATH}"/*(/N); do
             src_names[${f:t}]="$(<"${WORK_PATH}/.src-${f:t}" 2>/dev/null)"
         done
         print -r -- "  source unchanged from previous version (reused)"
     else
-        rm -rf "${OUT_PATH}/${TC_NAME}"*(/N)
+        rm -rf "${OUT_PATH}"/*(/N)
         rm -f "${WORK_PATH}/".src-*(N)
-        local idx=0 ok=0 u dest name l
-        for u in $URLS; do
-            (( idx == 0 )) && dest="$TC_PATH" || dest="${OUT_PATH}/${TC_NAME}-$((idx + 1))"
-            if name="$(download_unpack "$u" "$dest")"; then
-                src_names[${dest:t}]="$name"
+        local i ok=0 folder url dest name l
+        for i in {1..${#SRC_URLS[@]}}; do
+            folder="${SRC_FOLDERS[$i]}"
+            url="${SRC_URLS[$i]}"
+            dest="${OUT_PATH}/${folder}"
+            if name="$(download_unpack "$url" "$dest")"; then
+                src_names[$folder]="$name"
                 ok=1
             fi
-            (( idx++ ))
         done
         (( ok )) || { print -r -- "  no sources downloaded; skipping version"; return 1; }
 
-        # Content-hash dedup: drop any extra folder byte-identical to the
-        # primary (so genuinely different trees are never collapsed).
-        if (( ${#src_names[@]} > 1 )); then
-            local h0 hl
-            h0="$(tree_content_hash "$TC_PATH")"
-            for l in ${(k)src_names}; do
-                [[ "$l" == "$TC_NAME" ]] && continue
-                hl="$(tree_content_hash "${OUT_PATH}/$l")"
-                if [[ "$hl" == "$h0" ]]; then
-                    print -r -- "  $l identical to ${TC_NAME}; dropping"
-                    rm -rf "${OUT_PATH}/$l"
-                    unset "src_names[$l]"
-                fi
-            done
+        # Content-hash dedup: drop PlexMediaServer if byte-identical to
+        # PlexTranscoder (modern releases list the same source for both).
+        if [[ -n "${src_names[PlexTranscoder]:-}" && -n "${src_names[PlexMediaServer]:-}" ]]; then
+            if [[ "$(tree_content_hash "$TC_PATH")" == "$(tree_content_hash "${OUT_PATH}/PlexMediaServer")" ]]; then
+                print -r -- "  PlexMediaServer identical to PlexTranscoder; dropping"
+                rm -rf "${OUT_PATH}/PlexMediaServer"
+                unset 'src_names[PlexMediaServer]'
+            fi
         fi
         # Cache source names for the in-place reuse fast path.
         for l in ${(k)src_names}; do
