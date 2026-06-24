@@ -153,6 +153,10 @@ FF_ENABLE_DEPRECATION_WARNINGS
             if (hdr.bitstream_mode == 0x7 && hdr.channels > 1)
                 avctx->audio_service_type = AV_AUDIO_SERVICE_TYPE_KARAOKE;
             bit_rate = hdr.bit_rate;
+            
+            if (avctx->codec_id == AV_CODEC_ID_EAC3 && hdr.eac3_extension_type_a)
+                avctx->profile = FF_PROFILE_EAC3_DDP_ATMOS;
+ 
 #endif
         } else {
 #if CONFIG_AAC_PARSER

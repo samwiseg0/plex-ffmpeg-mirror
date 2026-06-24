@@ -29,6 +29,7 @@
 
 #include "config_components.h"
 
+#include "libavcodec/avcodec.h"
 #include "libavformat/http.h"
 #include "libavutil/aes.h"
 #include "libavutil/avstring.h"
@@ -1891,10 +1892,24 @@ static void add_stream_to_programs(AVFormatContext *s, struct playlist *pls, AVS
 static int set_stream_info_from_input_stream(AVStream *st, struct playlist *pls, AVStream *ist)
 {
     int err;
+    FFStream* const isti = ffstream(ist);
+
+    if (isti->avctx && (
+      isti->avctx->height ||
+      isti->avctx->sample_rate
+      )) {
+      err = avcodec_parameters_from_context(ist->codecpar, isti->avctx);
+      if (err < 0)
+        return err;
+    }
 
     err = avcodec_parameters_copy(st->codecpar, ist->codecpar);
     if (err < 0)
         return err;
+
+    err = av_dict_copy(&st->metadata, ist->metadata, 0);
+    if (err < 0)
+      return err;
 
     if (pls->is_id3_timestamped) /* custom timestamps via id3 */
         avpriv_set_pts_info(st, 33, 1, MPEG_TIME_BASE);
@@ -2473,7 +2488,12 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         /* There may be more situations where this would be useful, but this at least
          * handles newly probed codecs properly (i.e. request_probe by mpegts). */
-        if (ist->codecpar->codec_id != st->codecpar->codec_id) {
+        if (ist->codecpar->codec_id != st->codecpar->codec_id
+//PLEX
+            || (ist->codecpar->sample_rate && !st->codecpar->sample_rate)
+            || (ist->codecpar->ch_layout.nb_channels && !st->codecpar->ch_layout.nb_channels)
+//PLEX
+          ) {
             ret = set_stream_info_from_input_stream(st, pls, ist);
             if (ret < 0) {
                 return ret;

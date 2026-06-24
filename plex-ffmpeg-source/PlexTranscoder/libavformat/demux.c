@@ -93,7 +93,11 @@ static const AVCodec *find_probe_decoder(AVFormatContext *s, const AVStream *st,
                 return probe_codec;
             }
         }
+
+        // Trying a system decoder here will cause more trouble than it solves.
+        return NULL;
     }
+
 
     return codec;
 }
@@ -2788,6 +2792,7 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
             av_packet_unref(pkt1);
 
         sti->codec_info_nb_frames++;
+        sti->codec_info_nb_frames_total++; // PLEX
         count++;
     }
 

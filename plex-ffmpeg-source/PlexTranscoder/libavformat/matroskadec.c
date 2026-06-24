@@ -262,6 +262,7 @@ typedef struct MatroskaTrack {
     char    *codec_id;
     EbmlBin  codec_priv;
     char    *language;
+    char    *languageBCP47;
     double time_scale;
     uint64_t default_duration;
     uint64_t flag_default;
@@ -440,7 +441,7 @@ typedef struct MatroskaDemuxContext {
 // incomplete type (6.7.2 in C90, 6.9.2 in C99).
 // Removing the sizes breaks MSVC.
 static EbmlSyntax ebml_syntax[3], matroska_segment[9], matroska_track_video_color[15], matroska_track_video[19],
-                  matroska_track[33], matroska_track_encoding[6], matroska_track_encodings[2],
+                  matroska_track[34], matroska_track_encoding[6], matroska_track_encodings[2],
                   matroska_track_combine_planes[2], matroska_track_operation[2], matroska_block_addition_mapping[5], matroska_tracks[2],
                   matroska_attachments[2], matroska_chapter_entry[9], matroska_chapter[6], matroska_chapters[2],
                   matroska_index_entry[3], matroska_index[2], matroska_tag[3], matroska_tags[2], matroska_seekhead[2],
@@ -607,7 +608,8 @@ static EbmlSyntax matroska_track[] = {
     { MATROSKA_ID_CODECID,               EBML_STR,   0, 0, offsetof(MatroskaTrack, codec_id) },
     { MATROSKA_ID_CODECPRIVATE,          EBML_BIN,   0, 0, offsetof(MatroskaTrack, codec_priv) },
     { MATROSKA_ID_CODECDELAY,            EBML_UINT,  0, 0, offsetof(MatroskaTrack, codec_delay),  { .u = 0 } },
-    { MATROSKA_ID_TRACKLANGUAGE,         EBML_STR,   0, 0, offsetof(MatroskaTrack, language),     { .s = "eng" } },
+    { MATROSKA_ID_TRACKLANGUAGE,         EBML_STR,   0, 0, offsetof(MatroskaTrack, language),     { .s = "und" } },
+    { MATROSKA_ID_TRACKLANGUAGEBCP47,    EBML_STR,   0, 0, offsetof(MatroskaTrack, languageBCP47),{ .s = "und" } },
     { MATROSKA_ID_TRACKDEFAULTDURATION,  EBML_UINT,  0, 0, offsetof(MatroskaTrack, default_duration) },
     { MATROSKA_ID_TRACKTIMECODESCALE,    EBML_FLOAT, 0, 0, offsetof(MatroskaTrack, time_scale),   { .f = 1.0 } },
     { MATROSKA_ID_TRACKFLAGCOMMENTARY,   EBML_UINT,  0, 0, offsetof(MatroskaTrack, flag_comment), { .u = 0 } },
@@ -3178,8 +3180,26 @@ static int matroska_parse_tracks(AVFormatContext *s)
                         AV_DICT_DONT_STRDUP_VAL);
         }
 
-        if (strcmp(track->language, "und"))
+        /* If languageBCP47 tag is present it supersedes the language tag.  Preserve both if present */
+        if ((track->languageBCP47 != NULL) && strcmp(track->languageBCP47, "und"))
+        {
+            av_dict_set(&st->metadata, "language", track->languageBCP47, 0);
+            if ((track->language != NULL) && strcmp(track->language, "und"))
+            {
+                av_dict_set(&st->metadata, "languageISO639", track->language, 0);
+            }
+        }
+        else if ((track->language != NULL) && strcmp(track->language, "und"))
+        {
             av_dict_set(&st->metadata, "language", track->language, 0);
+            av_dict_set(&st->metadata, "languageISO639", track->language, 0);
+        }
+        else
+        {
+            av_dict_set(&st->metadata, "language", "eng", 0);
+            av_dict_set(&st->metadata, "languageISO639", "eng", 0);
+        }
+        
         av_dict_set(&st->metadata, "title", track->name, 0);
 
         if (track->time_scale < 0.01) {

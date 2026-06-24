@@ -7766,7 +7766,9 @@ static int mov_check_bitstream(AVFormatContext *s, AVStream *st,
         if (!trk->vos_data)
             return AVERROR(ENOMEM);
         memcpy(trk->vos_data, pkt->data, pkt->size);
-    } else if (st->codecpar->codec_id == AV_CODEC_ID_EAC3) {
+    }
+    if (st->codecpar->codec_id == AV_CODEC_ID_EAC3 || // PLEX
+        st->codecpar->codec_id == AV_CODEC_ID_AC3) {  // PLEX
         if(!trk->par)
             trk->par = st->codecpar;
         ret = parse_eac3(mov, pkt, trk, NULL);

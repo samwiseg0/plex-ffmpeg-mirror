@@ -192,6 +192,14 @@ static int mlp_parse(AVCodecParserContext *s,
             avctx->bit_rate = mh.peak_bitrate;
 
         mp->num_substreams = mh.num_substreams;
+        
+        /*  If there is a 4th substream and the MSB of substream_info is set,
+         *  there is a 16-channel spatial presentation (Atmos in TrueHD).
+         */
+        if (avctx->codec_id == AV_CODEC_ID_TRUEHD
+                && mh.num_substreams == 4 && mh.substream_info >> 7 == 1) {
+            avctx->profile     = AV_PROFILE_TRUEHD_ATMOS;
+        }
     }
 
     *poutbuf = buf;

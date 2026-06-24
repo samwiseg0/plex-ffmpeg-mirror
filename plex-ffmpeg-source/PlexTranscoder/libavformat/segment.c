@@ -868,6 +868,22 @@ static int seg_write_header(AVFormatContext *s)
     AVFormatContext *oc = seg->avf;
     int ret;
 
+    // PLEX
+    if (!seg->header_written) {
+      for (int i = 0; i < s->nb_streams; i++) {
+        AVCodecParameters *ipar = s->streams[i]->codecpar;
+        AVCodecParameters *opar = oc->streams[i]->codecpar;
+        
+        if (ipar->extradata_size && !opar->extradata_size)
+        {
+          if (!(opar->extradata = av_memdup(ipar->extradata, ipar->extradata_size)))
+            return AVERROR(ENOMEM);
+          opar->extradata_size = ipar->extradata_size;
+        }
+      }
+    }
+    // PLEX
+
     if (!seg->header_written) {
         ret = avformat_write_header(oc, NULL);
         if (ret < 0)

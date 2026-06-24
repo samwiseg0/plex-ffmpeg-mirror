@@ -65,6 +65,9 @@ AVFrame *ff_default_get_video_buffer2(AVFilterLink *link, int w, int h, int alig
         if (ret < 0)
             av_frame_free(&frame);
 
+        frame->width = w;
+        frame->height = h;
+
         return frame;
     }
 

@@ -1845,7 +1845,7 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
     int sample_rate = par->sample_rate;
     int output_sample_rate = 0;
     int j, ret;
-    const AVDictionaryEntry *tag;
+    const AVDictionaryEntry *tag, *tag2;
 
     if (par->codec_type == AVMEDIA_TYPE_ATTACHMENT)
         return 0;
@@ -1857,9 +1857,36 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
 
     if ((tag = av_dict_get(st->metadata, "title", NULL, 0)))
         put_ebml_string(pb, MATROSKA_ID_TRACKNAME, tag->value);
+
+
+    /* 
+       language metadata goes into the MATROSKA_ID_TRACKLANGUAGEBCP47 tag and
+       languageISO639 goes into the MATROSKA_ID_TRACKLANGUAGE unless
+       languageISO639 is present and language is missing in which case it goes
+       into both. If neither are present then mark MATROSKA_ID_TRACKLANGUAGEBCP47
+       as "und".  MATROSKA_ID_TRACKLANGUAGE should only be generated when 
+       languageISO639 is defined as it is an obsolete tag used for backwards
+       compatibility.
+    */
     tag = av_dict_get(st->metadata, "language", NULL, 0);
-    put_ebml_string(pb, MATROSKA_ID_TRACKLANGUAGE,
-                    tag && tag->value[0] ? tag->value : "und");
+    tag2 = av_dict_get(st->metadata, "languageISO639", NULL, 0);
+    if (tag && tag->value[0])
+    {
+      put_ebml_string(pb, MATROSKA_ID_TRACKLANGUAGEBCP47, tag->value);
+      if (tag2 && tag2->value[0])
+      {
+        put_ebml_string(pb, MATROSKA_ID_TRACKLANGUAGE, tag2->value);
+      }
+    }
+    else if (tag2 && tag2->value[0])
+    {
+      put_ebml_string(pb, MATROSKA_ID_TRACKLANGUAGEBCP47, tag2->value);
+      put_ebml_string(pb, MATROSKA_ID_TRACKLANGUAGE, tag2->value);
+    }
+    else
+    {
+      put_ebml_string(pb, MATROSKA_ID_TRACKLANGUAGEBCP47, "und");
+    }
 
     // The default value for TRACKFLAGDEFAULT is 1, so add element
     // if we need to clear it.

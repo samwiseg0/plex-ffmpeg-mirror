@@ -771,6 +771,21 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
     }
     handle_avoid_negative_ts(si, sti, pkt);
 
+    // PLEX: grab the packet side data from the bsf
+    if (pkt && !si->header_written && sti->bsfc && !st->codecpar->extradata_size)
+    {
+      size_t side_data_size;
+      uint8_t* side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA, &side_data_size);
+
+      if (side_data)
+      {
+        if (!(st->codecpar->extradata = av_memdup(side_data, side_data_size)))
+          return AVERROR(ENOMEM);
+        st->codecpar->extradata_size = side_data_size;
+      }
+    }
+    // PLEX
+
     ret = write_header(s);
     if (ret < 0)
       return ret;
@@ -979,6 +994,7 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
 {
     FFFormatContext *const si = ffformatcontext(s);
     int stream_count = 0;
+    int sparse_count = 0; // PLEX
     int noninterleaved_count = 0;
     int ret;
     int eof = flush;
@@ -994,6 +1010,12 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
         const AVCodecParameters *const par = st->codecpar;
         if (sti->last_in_packet_buffer) {
             ++stream_count;
+        // PLEX
+        } else if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE ||
+                   s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA ||
+                   s->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC) {
+            ++sparse_count;
+        // PLEX
         } else if (par->codec_type != AVMEDIA_TYPE_ATTACHMENT &&
                    par->codec_id != AV_CODEC_ID_VP8 &&
                    par->codec_id != AV_CODEC_ID_VP9 &&
@@ -1005,12 +1027,17 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
     if (si->nb_interleaved_streams == stream_count)
         flush = 1;
 
-    if (s->max_interleave_delta > 0 &&
-        si->packet_buffer.head &&
+    // PLEX
+    if (si->packet_buffer.head &&
         si->packet_buffer.head->pkt.dts != AV_NOPTS_VALUE &&
         !flush &&
-        si->nb_interleaved_streams == stream_count+noninterleaved_count
+        ((s->max_interleave_delta > 0 &&
+          si->nb_interleaved_streams == stream_count+sparse_count+noninterleaved_count) ||
+         (s->max_sparse_interleave_delta > 0 &&
+          sparse_count &&
+          si->nb_interleaved_streams == stream_count+sparse_count)) 
     ) {
+    // PLEX
         AVPacket *const top_pkt = &si->packet_buffer.head->pkt;
         int64_t delta_dts = INT64_MIN;
         int64_t top_dts = av_rescale_q(top_pkt->dts,
@@ -1032,13 +1059,26 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
             delta_dts = FFMAX(delta_dts, last_dts - top_dts);
         }
 
-        if (delta_dts > s->max_interleave_delta) {
+        // PLEX
+        if (s->max_interleave_delta > 0 &&
+            delta_dts > s->max_interleave_delta &&
+            si->nb_interleaved_streams == stream_count+sparse_count+noninterleaved_count) {
             av_log(s, AV_LOG_DEBUG,
                    "Delay between the first packet and last packet in the "
                    "muxing queue is %"PRId64" > %"PRId64": forcing output\n",
                    delta_dts, s->max_interleave_delta);
             flush = 1;
+        } else if (s->max_sparse_interleave_delta > 0 &&
+                   delta_dts > s->max_sparse_interleave_delta &&
+                   si->nb_interleaved_streams == stream_count+sparse_count) {
+            av_log(s, AV_LOG_DEBUG,
+                   "Delay between the first packet and last packet in the "
+                   "muxing queue is %"PRId64" > %"PRId64" and all delayed "
+                   "streams are sparse: forcing output\n",
+                   delta_dts, s->max_sparse_interleave_delta);
+            flush = 1;
         }
+        // PLEX
     }
 
 #if FF_API_LAVF_SHORTEST

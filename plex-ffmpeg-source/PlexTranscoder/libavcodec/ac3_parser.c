@@ -385,9 +385,21 @@ int ff_ac3_parse_header(GetBitContext *gbc, AC3HeaderInfo *hdr)
         if (ret < 0)
             return ret;
     }
-    hdr->channel_layout = ff_ac3_channel_layout_tab[hdr->channel_mode];
-    if (hdr->lfe_on)
-        hdr->channel_layout |= AV_CH_LOW_FREQUENCY;
+
+    if (hdr->frame_type == EAC3_FRAME_TYPE_DEPENDENT && hdr->channel_map_present) {
+        hdr->channel_layout = 0;
+        for (int ch = 0; ch < 16; ch++) {
+            if (hdr->channel_map & (1 << (EAC3_MAX_CHANNELS - ch - 1)))
+              hdr->channel_layout |= ff_eac3_custom_channel_map_locations[ch][1];
+        }
+
+        if (av_popcount64(hdr->channel_layout) > EAC3_MAX_CHANNELS)
+            return AC3_PARSE_ERROR_CHANNEL_MAP;
+    } else {
+        hdr->channel_layout = ff_ac3_channel_layout_tab[hdr->channel_mode];
+        if (hdr->lfe_on)
+            hdr->channel_layout |= AV_CH_LOW_FREQUENCY;
+    }
 
     return 0;
 }

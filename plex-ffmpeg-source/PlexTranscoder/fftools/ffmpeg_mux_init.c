@@ -47,6 +47,8 @@
 #include "libavutil/pixdesc.h"
 
 #include "plex.h" // PLEX
+#include "libavformat/internal.h" //PLEX
+
 
 #define DEFAULT_PASS_LOGFILENAME_PREFIX "ffmpeg2pass"
 
@@ -1689,8 +1691,9 @@ loop_end:
             return 0;
         
         if (ignore_unknown_streams &&
-          ist->st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
-          ist->st->codecpar->sample_rate <= 0) {
+                    (ist->st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||   // PLEX
+                     ist->st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&  // PLEX
+                     ffstream(ist->st)->codec_info_nb_frames_total == 0) {                     // PLEX
           av_log(NULL, AV_LOG_WARNING, "Skipping stream #%d:%d - not parsed.\n",
             map->file_index, map->stream_index);
           return 0;
