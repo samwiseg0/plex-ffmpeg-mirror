@@ -55,5 +55,4 @@ CVMetalTextureRef ff_metal_texture_from_pixbuf(void *avclass,
                                                int plane,
                                                MTLPixelFormat format)
                                                API_AVAILABLE(macos(10.11), ios(8.0));
-
 #endif /* AVFILTER_METAL_UTILS_H */

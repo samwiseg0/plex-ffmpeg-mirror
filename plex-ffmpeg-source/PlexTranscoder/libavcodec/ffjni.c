@@ -61,7 +61,7 @@ JNIEnv *ff_jni_get_env(void *log_ctx)
     }
 
     if (!java_vm) {
-        av_log(log_ctx, AV_LOG_ERROR, "No Java virtual machine has been registered\n");
+        av_log(log_ctx, AV_LOG_WARNING, "No Java virtual machine has been registered\n");
         goto done;
     }
 

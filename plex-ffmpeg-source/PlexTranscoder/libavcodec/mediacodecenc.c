@@ -23,6 +23,7 @@
 #include "config_components.h"
 
 #include "libavutil/avassert.h"
+#include "libavutil/avstring.h"
 #include "libavutil/hwcontext_mediacodec.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
@@ -73,6 +74,7 @@ typedef struct MediaCodecEncContext {
     int bitrate_mode;
     int level;
     int pts_as_dts;
+    int extract_extradata;
 } MediaCodecEncContext;
 
 enum {
@@ -111,32 +113,66 @@ static void mediacodec_output_format(AVCodecContext *avctx)
     ff_AMediaFormat_delete(out_format);
 }
 
+static int extract_extradata_support(AVCodecContext *avctx)
+{
+    const AVBitStreamFilter *bsf = av_bsf_get_by_name("extract_extradata");
+
+    if (!bsf) {
+        av_log(avctx, AV_LOG_WARNING, "extract_extradata bsf not found\n");
+        return 0;
+    }
+
+    if (!bsf->codec_ids) {
+        av_log(avctx, AV_LOG_WARNING, "extract_extradata bsf has no codec ids\n");
+        return 0;
+    }
+
+    for (int i = 0; bsf->codec_ids[i] != AV_CODEC_ID_NONE; i++) {
+        if (bsf->codec_ids[i] == avctx->codec_id)
+            return 1;
+    }
+
+    return 0;
+}
+
 static int mediacodec_init_bsf(AVCodecContext *avctx)
 {
     MediaCodecEncContext *s = avctx->priv_data;
-    char str[128];
+    char str[128] = {0};
     int ret;
     int crop_right = s->width - avctx->width;
     int crop_bottom = s->height - avctx->height;
 
-    if (!crop_right && !crop_bottom)
+    /* Nothing can be done for this format now */
+    if (avctx->pix_fmt == AV_PIX_FMT_MEDIACODEC)
         return 0;
 
-    if (avctx->codec_id == AV_CODEC_ID_H264)
-        ret = snprintf(str, sizeof(str), "h264_metadata=crop_right=%d:crop_bottom=%d",
-                 crop_right, crop_bottom);
-    else if (avctx->codec_id == AV_CODEC_ID_HEVC)
-        /* Encoder can use CTU size larger than 16x16, so the real crop
+    s->extract_extradata = (avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) &&
+                           extract_extradata_support(avctx);
+    if (!crop_right && !crop_bottom && !s->extract_extradata)
+        return 0;
+
+    ret = 0;
+    if (crop_right || crop_bottom) {
+        if (avctx->codec_id == AV_CODEC_ID_H264)
+            ret = snprintf(str, sizeof(str), "h264_metadata=crop_right=%d:crop_bottom=%d",
+                           crop_right, crop_bottom);
+        else if (avctx->codec_id == AV_CODEC_ID_HEVC)
+            /* Encoder can use CTU size larger than 16x16, so the real crop
              * margin can be larger than crop_right/crop_bottom. Let bsf figure
              * out the real crop margin.
              */
             ret = snprintf(str, sizeof(str), "hevc_metadata=width=%d:height=%d",
                            avctx->width, avctx->height);
-    else
-        return 0;
+        if (ret >= sizeof(str))
+            return AVERROR_BUFFER_TOO_SMALL;
+    }
 
-    if (ret >= sizeof(str))
-        return AVERROR_BUFFER_TOO_SMALL;
+    if (s->extract_extradata) {
+        ret = av_strlcatf(str, sizeof(str), "%sextract_extradata", ret ? "," : "");
+        if (ret >= sizeof(str))
+            return AVERROR_BUFFER_TOO_SMALL;
+    }
 
     ret = av_bsf_list_parse_str(str, &s->bsf);
     if (ret < 0)
@@ -339,10 +375,6 @@ static av_cold int mediacodec_init(AVCodecContext *avctx)
         goto bailout;
 
     mediacodec_output_format(avctx);
-    if (avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
-        av_log(avctx, AV_LOG_WARNING,
-                "Mediacodec encoder doesn't support AV_CODEC_FLAG_GLOBAL_HEADER. "
-                "Use extract_extradata bsf when necessary.\n");
 
     s->frame = av_frame_alloc();
     if (!s->frame)
@@ -536,7 +568,7 @@ static int mediacodec_encode(AVCodecContext *avctx, AVPacket *pkt)
                 return 0;
         }
 
-        if (ret != AVERROR(EAGAIN))
+        if (ret < 0 && ret != AVERROR(EAGAIN))
             return ret;
 
         if (!s->frame->buf[0]) {

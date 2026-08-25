@@ -514,6 +514,7 @@ static int get_pixel_format(AVCodecContext *avctx)
                      CONFIG_AV1_NVDEC_HWACCEL + \
                      CONFIG_AV1_VAAPI_HWACCEL + \
                      CONFIG_AV1_VDPAU_HWACCEL + \
+                     CONFIG_AV1_VIDEOTOOLBOX_HWACCEL + \
                      CONFIG_AV1_VULKAN_HWACCEL)
     enum AVPixelFormat pix_fmts[HWACCEL_MAX + 2], *fmtp = pix_fmts;
 
@@ -538,6 +539,9 @@ static int get_pixel_format(AVCodecContext *avctx)
 #if CONFIG_AV1_VDPAU_HWACCEL
         *fmtp++ = AV_PIX_FMT_VDPAU;
 #endif
+#if CONFIG_AV1_VIDEOTOOLBOX_HWACCEL
+        *fmtp++ = AV_PIX_FMT_VIDEOTOOLBOX;
+#endif
 #if CONFIG_AV1_VULKAN_HWACCEL
         *fmtp++ = AV_PIX_FMT_VULKAN;
 #endif
@@ -558,6 +562,9 @@ static int get_pixel_format(AVCodecContext *avctx)
 #endif
 #if CONFIG_AV1_VDPAU_HWACCEL
         *fmtp++ = AV_PIX_FMT_VDPAU;
+#endif
+#if CONFIG_AV1_VIDEOTOOLBOX_HWACCEL
+        *fmtp++ = AV_PIX_FMT_VIDEOTOOLBOX;
 #endif
 #if CONFIG_AV1_VULKAN_HWACCEL
         *fmtp++ = AV_PIX_FMT_VULKAN;
@@ -1367,6 +1374,10 @@ static int av1_receive_frame_internal(AVCodecContext *avctx, AVFrame *frame)
 
         if (raw_tile_group && (s->tile_num == raw_tile_group->tg_end + 1)) {
             int show_frame = s->raw_frame_header->show_frame;
+            // Set nb_unit to point at the next OBU, to indicate which
+            // OBUs have been processed for this current frame. (If this
+            // frame gets output, we set nb_unit to this value later too.)
+            s->nb_unit = i + 1;
             if (avctx->hwaccel && s->cur_frame.f->buf[0]) {
                 ret = FF_HW_SIMPLE_CALL(avctx, end_frame);
                 if (ret < 0) {
@@ -1380,6 +1391,9 @@ static int av1_receive_frame_internal(AVCodecContext *avctx, AVFrame *frame)
                 av_log(avctx, AV_LOG_ERROR, "Failed to update reference list.\n");
                 goto end;
             }
+
+            // Set start_unit to indicate the first OBU of the next frame.
+            s->start_unit = s->nb_unit;
 
             if (s->raw_frame_header->show_frame && s->cur_frame.f->buf[0]) {
                 ret = set_output_frame(avctx, frame);
@@ -1407,7 +1421,7 @@ end:
             s->raw_frame_header = NULL;
         av_packet_unref(s->pkt);
         ff_cbs_fragment_reset(&s->current_obu);
-        s->nb_unit = 0;
+        s->nb_unit = s->start_unit = 0;
     }
 
     return ret;
@@ -1432,7 +1446,7 @@ static int av1_receive_frame(AVCodecContext *avctx, AVFrame *frame)
                 return ret;
             }
 
-            s->nb_unit = 0;
+            s->nb_unit = s->start_unit = 0;
             av_log(avctx, AV_LOG_DEBUG, "Total OBUs on this packet: %d.\n",
                    s->current_obu.nb_units);
         }
@@ -1453,7 +1467,7 @@ static void av1_decode_flush(AVCodecContext *avctx)
 
     av1_frame_unref(&s->cur_frame);
     s->operating_point_idc = 0;
-    s->nb_unit = 0;
+    s->nb_unit = s->start_unit = 0;
     s->raw_frame_header = NULL;
     s->raw_seq = NULL;
     s->cll = NULL;
@@ -1515,6 +1529,9 @@ const FFCodec ff_av1_decoder = {
 #endif
 #if CONFIG_AV1_VDPAU_HWACCEL
         HWACCEL_VDPAU(av1),
+#endif
+#if CONFIG_AV1_VIDEOTOOLBOX_HWACCEL
+        HWACCEL_VIDEOTOOLBOX(av1),
 #endif
 #if CONFIG_AV1_VULKAN_HWACCEL
         HWACCEL_VULKAN(av1),

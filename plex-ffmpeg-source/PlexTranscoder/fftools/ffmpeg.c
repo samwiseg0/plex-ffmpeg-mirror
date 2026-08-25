@@ -1262,7 +1262,29 @@ static int transcode_step(OutputStream *ost)
     // process_input() above might have caused output to become available
     // in multiple filtergraphs, so we process all of them
     for (int i = 0; i < nb_filtergraphs; i++) {
-        ret = reap_filters(filtergraphs[i], 0);
+        FilterGraph *fg = filtergraphs[i];
+
+        // PLEX: An output whose graph has high startup latency (e.g. loudnorm's
+        // 3s lookahead) is perpetually "behind" in choose_output and monopolizes
+        // input reading. Packets for *other* graphs get hardware-decoded but are
+        // only passively reaped (NO_REQUEST) and never have their oldest frame
+        // requested, so those frames are never encoded and their surfaces never
+        // released. With a fixed hwaccel surface pool this exhausts the pool
+        // (get_buffer() failed / Out of memory) and garbles output. Actively
+        // flush graphs other than the one being stepped to release the surfaces.
+        if (fg->graph && ost->filter && fg != ost->filter->graph) {
+            int flush_ret;
+            while ((flush_ret = avfilter_graph_request_oldest(fg->graph)) >= 0) {
+                ret = reap_filters(fg, 0);
+                if (ret < 0)
+                    return ret;
+            }
+            if (flush_ret != AVERROR(EAGAIN) && flush_ret != AVERROR_EOF)
+                return flush_ret;
+        }
+        // PLEX
+
+        ret = reap_filters(fg, 0);
         if (ret < 0)
             return ret;
     }
