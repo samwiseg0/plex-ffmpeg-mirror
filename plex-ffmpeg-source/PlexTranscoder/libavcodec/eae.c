@@ -856,104 +856,8 @@ static int eae_parse_ac3_frame_header(uint8_t *data, int size,
     if ((ret = ff_ac3_parse_header(&gb, header)) < 0)
         return ret;
 
-    if (eac3_sync) {
-        int i;
-
-        *eac3_sync = 1;
-
-        skip_bits(&gb, 5); // skip bitstream id
-
-        /* volume control params */
-        for (i = 0; i < (header->channel_mode ? 1 : 2); i++) {
-            skip_bits(&gb, 5);
-            if (get_bits1(&gb))
-                skip_bits(&gb, 8);
-        }
-
-
-        /* dependent stream channel map */
-        if (header->frame_type == EAC3_FRAME_TYPE_DEPENDENT) {
-            if (get_bits1(&gb))
-                skip_bits(&gb, 16); // skip custom channel map
-        }
-
-        /* mixing metadata */
-        if (get_bits1(&gb)) {
-            /* center and surround mix levels */
-            if (header->channel_mode > AC3_CHMODE_STEREO) {
-                skip_bits(&gb, 2);
-                if (header->channel_mode & 1)
-                    skip_bits(&gb, 6);
-                if (header->channel_mode & 4)
-                    skip_bits(&gb, 6);
-            }
-
-            /* lfe mix level */
-            if (header->lfe_on && get_bits1(&gb))
-                skip_bits(&gb, 5);
-
-            /* info for mixing with other streams and substreams */
-            if (header->frame_type == EAC3_FRAME_TYPE_INDEPENDENT) {
-                for (i = 0; i < (header->channel_mode ? 1 : 2); i++) {
-                    if (get_bits1(&gb))
-                        skip_bits(&gb, 6);  // skip program scale factor
-                }
-                if (get_bits1(&gb))
-                    skip_bits(&gb, 6);  // skip external program scale factor
-                /* skip mixing parameter data */
-                switch(get_bits(&gb, 2)) {
-                    case 1: skip_bits(&gb, 5);  break;
-                    case 2: skip_bits(&gb, 12); break;
-                    case 3: {
-                        int mix_data_size = (get_bits(&gb, 5) + 2) << 3;
-                        skip_bits_long(&gb, mix_data_size);
-                        break;
-                    }
-                }
-                /* skip pan information for mono or dual mono source */
-                if (header->channel_mode < AC3_CHMODE_STEREO) {
-                    for (i = 0; i < (header->channel_mode ? 1 : 2); i++) {
-                        if (get_bits1(&gb)) {
-                            /* note: this is not in the ATSC A/52B specification
-                            reference: ETSI TS 102 366 V1.1.1
-                                        section: E.1.3.1.25 */
-                            skip_bits(&gb, 8);  // skip pan mean direction index
-                            skip_bits(&gb, 6);  // skip reserved paninfo bits
-                        }
-                    }
-                }
-                /* skip mixing configuration information */
-                if (get_bits1(&gb)) {
-                    int blk;
-                    for (blk = 0; blk < header->num_blocks; blk++) {
-                        if (header->num_blocks == 1 || get_bits1(&gb))
-                            skip_bits(&gb, 5);
-                    }
-                }
-            }
-        }
-
-        /* informational metadata */
-        if (get_bits1(&gb)) {
-            skip_bits(&gb, 3);
-            skip_bits(&gb, 2); // skip copyright bit and original bitstream bit
-            if (header->channel_mode == AC3_CHMODE_STEREO)
-                skip_bits(&gb, 4);
-            if (header->channel_mode >= AC3_CHMODE_2F2R)
-                skip_bits(&gb, 2);
-            for (i = 0; i < (header->channel_mode ? 1 : 2); i++) {
-                if (get_bits1(&gb))
-                    skip_bits(&gb, 8); // skip mix level, room type, and A/D converter type
-            }
-            if (header->sr_code != 3)
-                skip_bits1(&gb); // skip source sample rate code
-        }
-
-        // converter synchronization flag
-        // yes, this is the only bit we actually want
-        if (header->frame_type == EAC3_FRAME_TYPE_INDEPENDENT && header->num_blocks != 6)
-            *eac3_sync = get_bits1(&gb);
-    }
+    if (eac3_sync)
+        *eac3_sync = header->convsync;
 
     return 0;
 }
@@ -992,6 +896,37 @@ static int eae_get_ac3_packet_size(uint8_t *data, int size)
     return frame_size;
 }
 
+// Return the number of samples in an EAC3 packet, which may contain more than
+// one syncframe. Only the first independent substream is counted, dependent
+// and additional independent substreams carry the same samples.
+// *sync is set to the converter sync flag of the first frame.
+static int eae_get_eac3_packet_samples(uint8_t *data, int size, int *sync)
+{
+    AC3HeaderInfo header;
+    int offset = 0, samples = 0;
+    int err;
+
+    while (offset < size) {
+        err = eae_parse_ac3_frame_header(data + offset, size - offset, &header,
+                                         offset ? NULL : sync);
+        if (err < 0) {
+            // trailing garbage after a valid frame is not our problem
+            if (offset)
+                break;
+            return err;
+        }
+        if (header.frame_size < 1)
+            return AVERROR_INVALIDDATA;
+
+        if (header.frame_type != EAC3_FRAME_TYPE_DEPENDENT && !header.substreamid)
+            samples += header.num_blocks * 256;
+
+        offset += header.frame_size;
+    }
+
+    return samples;
+}
+
 // Mangle input-packets in some way, and merge or queue them to the actual input
 // buffer if applicable.
 // Currently, this will merge TrueHD packets, so that each new packet starts
@@ -1012,29 +947,23 @@ static int eae_prequeue_packet(AVCodecContext *avctx, const AVPacket *avpkt)
         // For EAC3, we must be sure EAE receives groups of 6 blocks. If the
         // number of blocks per packet is less than 6 (the maximum), we must
         // merge them to avoid cutting audio at the wrong boundaries. EAE will
-        // simply discard packets until the next sync point.
-        // The sync point could be retrieved exactly by parsing the EAC3
-        // payload, but unfortunately the sync bit is placed inconveniently
-        // behind lots of other data which is very annoying to skip.
+        // simply discard packets until the next sync point, which is marked
+        // by the converter sync flag in the EAC3 header.
         // In addition, this code retrieves the real frame_size.
-        AC3HeaderInfo header;
-        int sync;
-        if ((err = eae_parse_ac3_frame_header(avpkt->data, avpkt->size, &header, &sync)) < 0)
-            return err;
+        int sync, samples;
+        if ((samples = eae_get_eac3_packet_samples(avpkt->data, avpkt->size, &sync)) < 0)
+            return samples;
 
         // If this is a sync packet, flush all previous packets.  This can
         // delay sending to eae by a packet but ensures that we start every
         // file with a sync since eae throws away packets before a sync.
         if (sync && s->num_prebuffered_samples != 0)
         {
-          // eae expects groups of 6 blocks, this can cause issues if
-          // we ever see packets contain more than 1 block.  Since we
-          // have not seen that there is no need to add complication... yet
+          // eae expects groups of 6 blocks, but it resets its block count
+          // on an early sync, so a short group is not fatal
           if (s->num_prebuffered_samples % (6 * 256) != 0)
-          {
-            av_log(avctx, AV_LOG_ERROR, "Cannot group in blocks of 6!\n");
-            return AVERROR_INVALIDDATA;
-          }
+            av_log(avctx, AV_LOG_WARNING, "Cannot group in blocks of 6 (%d samples)\n",
+                   s->num_prebuffered_samples);
 
           // if there was an error flushing, exit with that error, otherwise
           // continue processing this packet
@@ -1050,7 +979,14 @@ static int eae_prequeue_packet(AVCodecContext *avctx, const AVPacket *avpkt)
 
         if ((err = eae_merge_prebuffer_packet(avctx, avpkt)) < 0)
             return err;
-        s->num_prebuffered_samples += header.num_blocks * 256;
+        s->num_prebuffered_samples += samples;
+
+        // Avoid OOM'ing us if the stream never sets the sync flag again.
+        if (s->num_prebuffered_samples > 1000000) {
+            av_log(avctx, AV_LOG_ERROR, "no converter sync found, dropping\n");
+            av_packet_unref(&s->prebuffered_packet);
+            s->num_prebuffered_samples = 0;
+        }
 
         return 0;
     }

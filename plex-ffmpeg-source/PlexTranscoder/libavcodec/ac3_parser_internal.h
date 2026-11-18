@@ -49,6 +49,7 @@ typedef struct AC3HeaderInfo {
     uint8_t channel_map_present;
     uint16_t channel_map;
     int num_blocks;                         ///< number of audio blocks
+    int convsync;                           ///< converter synchronization flag (1 if not coded)
     int dolby_surround_mode;
     /** @} */
 

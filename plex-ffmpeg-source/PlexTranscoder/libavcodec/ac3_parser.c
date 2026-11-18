@@ -253,7 +253,7 @@ static int eac3_parse_header(GetBitContext *gbc, AC3HeaderInfo *hdr)
        once every 6 blocks to indicate the start of a frame set.
        reference: RFC 4598, Section 2.1.3  Frame Sets */
     if (hdr->frame_type == EAC3_FRAME_TYPE_INDEPENDENT && hdr->num_blocks != 6) {
-        skip_bits1(gbc); // skip converter synchronization flag
+        hdr->convsync = get_bits1(gbc);
     }
 
     /* original frame size code if this stream was converted from AC-3 */
@@ -300,6 +300,7 @@ int ff_ac3_parse_header(GetBitContext *gbc, AC3HeaderInfo *hdr)
         return AAC_AC3_PARSE_ERROR_BSID;
 
     hdr->num_blocks = 6;
+    hdr->convsync = 1;
     hdr->ac3_bit_rate_code = -1;
 
     /* set default mix levels */
